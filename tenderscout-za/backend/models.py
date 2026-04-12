@@ -71,3 +71,18 @@ class ScraperStatus(Base):
     last_result_count = Column(Integer, default=0)
     last_error = Column(Text, nullable=True)
     is_healthy = Column(Boolean, default=True)
+
+
+class CrawlResult(Base):
+    __tablename__ = "crawl_results"
+
+    id = Column(Integer, primary_key=True, index=True)
+    site_name = Column(String, nullable=False, index=True)
+    seed_url = Column(String, nullable=False)
+    discovered_url = Column(String, nullable=False)
+    depth = Column(Integer, default=0)
+    status_code = Column(Integer, default=200)
+    url_hash = Column(String, unique=True, index=True)   # MD5 of discovered_url
+    discovered_at = Column(DateTime(timezone=True), server_default=func.now())
+    last_seen_at = Column(DateTime(timezone=True), onupdate=func.now())
+    is_active = Column(Boolean, default=True)
