@@ -91,11 +91,11 @@ export default function Search() {
         </div>
 
         <div>
-          <p className="text-xs font-medium text-gray-700 mb-2">Industries</p>
+          <p className="text-sm font-medium text-gray-700 mb-2">Industries</p>
           <div className="flex flex-wrap gap-1.5">
             {INDUSTRIES.map(i => (
               <button key={i} onClick={() => toggle(selIndustries, setSelIndustries, i)}
-                className={'px-2.5 py-1 rounded-full text-xs border transition-colors ' +
+                className={'px-2.5 py-1 rounded-full text-sm border transition-colors ' +
                   (selIndustries.includes(i)
                     ? 'bg-brand-400 text-white border-brand-400'
                     : 'bg-white text-gray-600 border-gray-200 hover:border-brand-400')}>
@@ -106,11 +106,11 @@ export default function Search() {
         </div>
 
         <div>
-          <p className="text-xs font-medium text-gray-700 mb-2">Provinces</p>
+          <p className="text-sm font-medium text-gray-700 mb-2">Provinces</p>
           <div className="flex flex-wrap gap-1.5">
             {PROVINCES.map(p => (
               <button key={p} onClick={() => toggle(selProvinces, setSelProvinces, p)}
-                className={'px-2.5 py-1 rounded-full text-xs border transition-colors ' +
+                className={'px-2.5 py-1 rounded-full text-sm border transition-colors ' +
                   (selProvinces.includes(p)
                     ? 'bg-brand-400 text-white border-brand-400'
                     : 'bg-white text-gray-600 border-gray-200 hover:border-brand-400')}>
@@ -121,7 +121,7 @@ export default function Search() {
         </div>
 
         <div className="flex items-center justify-between pt-2 border-t border-gray-100">
-          <span className="text-xs text-gray-400">
+          <span className="text-sm text-gray-400">
             {selIndustries.length} industry · {selProvinces.length} province filters active
           </span>
           <button onClick={() => handleSearch(1)} disabled={loading} className="btn-primary text-sm py-2 px-5">
@@ -132,7 +132,7 @@ export default function Search() {
 
       {searched && (
         <div className="mb-4 flex items-center justify-between">
-          <p className="text-sm text-gray-700">
+          <p className="text-base text-gray-700">
             {total} result{total !== 1 ? 's' : ''} found
             {charged > 0 && <span className="text-gray-400 ml-2">· {charged} credits used</span>}
           </p>
@@ -146,7 +146,7 @@ export default function Search() {
       {total > 10 && (
         <div className="flex items-center justify-center gap-4 mt-6">
           <button onClick={() => handleSearch(page - 1)} disabled={page === 1} className="btn-secondary text-sm">Previous</button>
-          <span className="text-sm text-gray-600">Page {page} of {Math.ceil(total / 10)}</span>
+          <span className="text-base text-gray-600">Page {page} of {Math.ceil(total / 10)}</span>
           <button onClick={() => handleSearch(page + 1)} disabled={page >= Math.ceil(total / 10)} className="btn-secondary text-sm">Next</button>
         </div>
       )}

@@ -89,10 +89,10 @@ export default function Dashboard() {
     <div className="p-4 md:p-6 max-w-4xl mx-auto">
       <div className="flex items-start justify-between mb-4 md:mb-6">
         <div>
-          <h1 className="text-base md:text-lg font-semibold text-gray-900">
+          <h1 className="text-lg md:text-xl font-semibold text-gray-900">
             Good {new Date().getHours() < 12 ? 'morning' : 'afternoon'}, {user?.full_name?.split(' ')[0]}
           </h1>
-          <p className="text-xs md:text-sm text-gray-500 mt-0.5">
+          <p className="text-sm md:text-base text-gray-500 mt-0.5">
             {total} tenders
             {isFromSearch ? ' — filtered by your last search' : ' matching your preferences'}
           </p>
@@ -111,17 +111,17 @@ export default function Dashboard() {
       {isFromSearch && (
         <div className="mb-4 flex flex-wrap gap-1.5">
           {ind.map(i => (
-            <span key={i} className="px-2 py-0.5 bg-brand-50 text-brand-700 text-xs rounded-full border border-brand-200">{i}</span>
+            <span key={i} className="px-2 py-0.5 bg-brand-50 text-brand-700 text-sm rounded-full border border-brand-200">{i}</span>
           ))}
           {prov.map(p => (
-            <span key={p} className="px-2 py-0.5 bg-gray-100 text-gray-600 text-xs rounded-full border border-gray-200">{p}</span>
+            <span key={p} className="px-2 py-0.5 bg-gray-100 text-gray-600 text-sm rounded-full border border-gray-200">{p}</span>
           ))}
         </div>
       )}
 
       {newCount > 0 && (
         <div className="mb-4 flex items-center justify-between bg-brand-50 border border-brand-200 rounded-xl px-4 py-3">
-          <span className="text-sm text-brand-600">{newCount} new tender{newCount > 1 ? 's' : ''} found</span>
+          <span className="text-base text-brand-600">{newCount} new tender{newCount > 1 ? 's' : ''} found</span>
           <button onClick={loadNewTenders} className="text-sm font-medium text-brand-600 hover:text-brand-800">Load</button>
         </div>
       )}
@@ -134,9 +134,9 @@ export default function Dashboard() {
           { label: 'Provinces',     val: prov.length,                  sub: 'active filters' },
         ].map(({ label, val, sub }) => (
           <div key={label} className="bg-gray-100 rounded-xl px-3 py-2.5 md:px-4 md:py-3">
-            <p className="text-xs text-gray-500">{label}</p>
-            <p className="text-xl md:text-2xl font-semibold text-gray-900 mt-0.5">{val}</p>
-            <p className="text-xs text-gray-400">{sub}</p>
+            <p className="text-sm text-gray-500">{label}</p>
+            <p className="text-2xl md:text-3xl font-semibold text-gray-900 mt-0.5">{val}</p>
+            <p className="text-sm text-gray-400">{sub}</p>
           </div>
         ))}
       </div>
@@ -146,7 +146,7 @@ export default function Dashboard() {
           <div className="w-6 h-6 border-2 border-brand-400 border-t-transparent rounded-full animate-spin" />
         </div>
       ) : tenders.length === 0 ? (
-        <div className="text-center py-16 text-gray-400 text-sm">
+        <div className="text-center py-16 text-gray-400 text-base">
           No tenders found. Try adjusting your filters on the Search page.
         </div>
       ) : (
