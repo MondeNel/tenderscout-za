@@ -22,8 +22,7 @@ logging.basicConfig(
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     logging.info("[DB] Tables created")
-    await run_scraper()
-    start_scheduler()
+    start_scheduler()  # scraper runs after first 60s interval, not blocking startup
     yield
     stop_scheduler()
 

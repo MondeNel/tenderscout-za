@@ -64,3 +64,28 @@ def get_headers() -> dict:
         "Accept-Language": "en-ZA,en;q=0.9",
         "Connection": "keep-alive",
     }
+
+
+CURRENT_YEAR = 2026
+
+def is_likely_expired(text: str, url: str) -> bool:
+    combined = (text + ' ' + url).lower()
+    # Filter URLs/titles containing old years
+    old_years = [str(y) for y in range(2018, CURRENT_YEAR - 1)]
+    for year in old_years:
+        if year in combined:
+            return True
+    return False
+
+
+async def url_is_alive(url: str) -> bool:
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=8, verify=False, follow_redirects=True) as client:
+            r = await client.head(url)
+            if r.status_code == 405:
+                # HEAD not allowed, try GET
+                r = await client.get(url)
+            return r.status_code < 400
+    except Exception:
+        return False
