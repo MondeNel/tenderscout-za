@@ -1,6 +1,6 @@
 import httpx
 from bs4 import BeautifulSoup
-from scraper.utils import make_content_hash, detect_industry, detect_province, clean_text, get_headers
+from scraper.utils import make_content_hash, detect_industry, detect_province, clean_text, get_headers, is_likely_expired
 from typing import List, Dict
 import logging
 
@@ -132,20 +132,33 @@ async def scrape_phoca(client: httpx.AsyncClient, city: Dict) -> List[Dict]:
                 continue
             seen.add(title)
 
+            # Skip likely expired tenders (old year in URL or title)
+            if is_likely_expired(title, full_url if full_url.startswith('http') else city['url']):
+                continue
+
+            listing_url = city["url"]
+            # document_url: direct link to the file if available, else None
+            doc_url = None
+            if href and href.startswith("http") and any(href.lower().endswith(ext) for ext in [".pdf", ".doc", ".docx", ".zip"]):
+                doc_url = href
+            elif href and any(ext in href.lower() for ext in [".pdf", ".doc", ".docx"]):
+                doc_url = full_url if full_url.startswith("http") else None
+
             results.append({
                 "title": title,
-                "description": f"Tender/Bid document from {city['name']}",
+                "description": f"Tender/Bid document from {city['name']}. Click to view all current tenders on their website.",
                 "issuing_body": city["name"],
                 "province": city["province"],
                 "town": city["town"],
                 "industry_category": detect_industry(title),
                 "closing_date": "",
                 "posted_date": "",
-                "source_url": full_url if full_url.startswith("http") else city["url"],
+                "source_url": listing_url,
+                "document_url": doc_url,
                 "source_site": city["url"].split("/")[2],
                 "reference_number": "",
                 "contact_info": "",
-                "content_hash": make_content_hash(title, city["url"]),
+                "content_hash": make_content_hash(title, listing_url),
             })
 
     except Exception as e:
@@ -179,20 +192,26 @@ async def scrape_links(client: httpx.AsyncClient, city: Dict) -> List[Dict]:
 
             full_url = href if href.startswith("http") else f"https://{base}{href}"
 
+            is_download = any(x in full_url for x in ['download=', '.pdf', '.doc', '.zip'])
+            # source_url = stable listing page always
+            # document_url = direct deep link to the tender page or file
+            doc_url = full_url if full_url != city["url"] else None
+
             results.append({
                 "title": text,
-                "description": f"Tender from {city['name']}",
+                "description": f"Tender from {city['name']}. Visit their website to view full tender details.",
                 "issuing_body": city["name"],
                 "province": city["province"],
                 "town": city["town"],
                 "industry_category": detect_industry(text),
                 "closing_date": "",
                 "posted_date": "",
-                "source_url": full_url,
+                "source_url": city["url"],
+                "document_url": doc_url,
                 "source_site": base,
                 "reference_number": "",
                 "contact_info": "",
-                "content_hash": make_content_hash(text, full_url),
+                "content_hash": make_content_hash(text, city["url"]),
             })
 
     except Exception as e:

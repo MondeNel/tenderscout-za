@@ -33,7 +33,10 @@ export default function TenderCard({ tender, showBadgeColor = true }) {
   const color = showBadgeColor
     ? (BADGE_COLORS[tender.industry_category] || BADGE_COLORS['General'])
     : 'bg-gray-100 text-gray-600'
-  const validUrl = isValidUrl(tender.source_url)
+  // Prefer direct document link, fall back to listing page
+  const linkUrl = tender.document_url || tender.source_url
+  const validUrl = isValidUrl(linkUrl)
+  const isDirect = Boolean(tender.document_url)
 
   return (
     <div className="card hover:border-gray-300 transition-colors">
@@ -65,9 +68,10 @@ export default function TenderCard({ tender, showBadgeColor = true }) {
           : <span className="text-xs text-gray-400">{tender.source_site}</span>
         }
         {validUrl ? (
-          <a href={tender.source_url} target="_blank" rel="noopener noreferrer"
-            className="flex items-center gap-1 text-xs text-brand-600 hover:text-brand-800">
-            View tender <ExternalLink size={11} />
+          <a href={linkUrl} target="_blank" rel="noopener noreferrer"
+            className="flex items-center gap-1 text-xs text-brand-600 hover:text-brand-800"
+            title={isDirect ? 'Open document directly' : 'Open tender listing page'}>
+            {isDirect ? 'Open document' : 'View listing'} <ExternalLink size={11} />
           </a>
         ) : (
           <span className="flex items-center gap-1 text-xs text-gray-400">

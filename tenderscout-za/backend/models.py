@@ -36,6 +36,7 @@ class Tender(Base):
     reference_number = Column(String, nullable=True)
     contact_info = Column(Text, nullable=True)
     content_hash = Column(String, unique=True, index=True)
+    document_url = Column(String, nullable=True)
     scraped_at = Column(DateTime(timezone=True), server_default=func.now())
     is_active = Column(Boolean, default=True)
 

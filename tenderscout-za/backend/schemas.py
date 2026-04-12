@@ -52,6 +52,7 @@ class TenderOut(BaseModel):
     source_url: str
     source_site: Optional[str]
     reference_number: Optional[str]
+    document_url: Optional[str]
     scraped_at: datetime
 
     class Config:
