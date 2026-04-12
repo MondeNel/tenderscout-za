@@ -1,4 +1,6 @@
-import { ExternalLink, MapPin, Clock, Building2, AlertCircle } from 'lucide-react'
+import { useState } from 'react'
+import { ExternalLink, MapPin, Clock, Building2, AlertCircle, FileText } from 'lucide-react'
+import TenderDrawer from './TenderDrawer'
 
 const BADGE_COLORS = {
   'ICT / Technology':     'bg-blue-50 text-blue-700',
@@ -30,55 +32,74 @@ function isValidUrl(url) {
 }
 
 export default function TenderCard({ tender, showBadgeColor = true }) {
+  const [drawerOpen, setDrawerOpen] = useState(false)
+
   const color = showBadgeColor
     ? (BADGE_COLORS[tender.industry_category] || BADGE_COLORS['General'])
     : 'bg-gray-100 text-gray-600'
-  // Prefer direct document link, fall back to listing page
+
   const linkUrl = tender.document_url || tender.source_url
   const validUrl = isValidUrl(linkUrl)
-  const isDirect = Boolean(tender.document_url)
+  const isPdf = linkUrl?.toLowerCase().includes('.pdf') ||
+                linkUrl?.toLowerCase().includes('phocadownload')
 
   return (
-    <div className="card hover:border-gray-300 transition-colors">
-      <div className="flex items-start justify-between gap-3 mb-2">
-        <h3 className="text-base font-medium text-gray-900 leading-snug">{tender.title}</h3>
-        <span className={'badge flex-shrink-0 ' + color}>{tender.industry_category}</span>
+    <>
+      <div
+        className="card hover:border-gray-300 transition-colors cursor-pointer"
+        onClick={() => validUrl && setDrawerOpen(true)}
+      >
+        <div className="flex items-start justify-between gap-3 mb-2">
+          <h3 className="text-base font-medium text-gray-900 leading-snug">{tender.title}</h3>
+          <span className={'badge flex-shrink-0 ' + color}>{tender.industry_category}</span>
+        </div>
+
+        {tender.description && tender.description.length > 20 && (
+          <p className="text-sm text-gray-500 mb-2 line-clamp-2">{tender.description}</p>
+        )}
+
+        <div className="flex flex-wrap gap-x-4 gap-y-1 mb-3">
+          {tender.issuing_body && (
+            <span className="flex items-center gap-1 text-sm text-gray-500">
+              <Building2 size={12} />{tender.issuing_body}
+            </span>
+          )}
+          {tender.province && (
+            <span className="flex items-center gap-1 text-sm text-gray-500">
+              <MapPin size={12} />{tender.town ? tender.town + ', ' : ''}{tender.province}
+            </span>
+          )}
+          <span className="flex items-center gap-1 text-sm text-gray-500">
+            <Clock size={12} />{timeAgo(tender.scraped_at)}
+          </span>
+        </div>
+
+        <div className="flex items-center justify-between pt-2 border-t border-gray-100">
+          {tender.closing_date
+            ? <span className="text-sm text-red-500">Closes {tender.closing_date}</span>
+            : <span className="text-sm text-gray-400">{tender.source_site}</span>
+          }
+          {validUrl ? (
+            <button
+              onClick={e => { e.stopPropagation(); setDrawerOpen(true) }}
+              className="flex items-center gap-1 text-sm text-brand-600 hover:text-brand-800 font-medium"
+            >
+              {isPdf ? <><FileText size={13} /> View document</> : <><ExternalLink size={13} /> View tender</>}
+            </button>
+          ) : (
+            <span className="flex items-center gap-1 text-sm text-gray-400">
+              <AlertCircle size={13} /> Link unavailable
+            </span>
+          )}
+        </div>
       </div>
-      {tender.description && tender.description.length > 20 && (
-        <p className="text-sm text-gray-500 mb-2 line-clamp-2">{tender.description}</p>
+
+      {drawerOpen && (
+        <TenderDrawer
+          tender={tender}
+          onClose={() => setDrawerOpen(false)}
+        />
       )}
-      <div className="flex flex-wrap gap-x-4 gap-y-1 mb-3">
-        {tender.issuing_body && (
-          <span className="flex items-center gap-1 text-sm text-gray-500">
-            <Building2 size={11} />{tender.issuing_body}
-          </span>
-        )}
-        {tender.province && (
-          <span className="flex items-center gap-1 text-sm text-gray-500">
-            <MapPin size={11} />{tender.town ? tender.town + ', ' : ''}{tender.province}
-          </span>
-        )}
-        <span className="flex items-center gap-1 text-sm text-gray-500">
-          <Clock size={11} />{timeAgo(tender.scraped_at)}
-        </span>
-      </div>
-      <div className="flex items-center justify-between pt-2 border-t border-gray-100">
-        {tender.closing_date
-          ? <span className="text-sm text-red-500">Closes {tender.closing_date}</span>
-          : <span className="text-sm text-gray-400">{tender.source_site}</span>
-        }
-        {validUrl ? (
-          <a href={linkUrl} target="_blank" rel="noopener noreferrer"
-            className="flex items-center gap-1 text-sm text-brand-600 hover:text-brand-800"
-            title={isDirect ? 'Open document directly' : 'Open tender listing page'}>
-            {isDirect ? 'Open document' : 'View listing'} <ExternalLink size={11} />
-          </a>
-        ) : (
-          <span className="flex items-center gap-1 text-sm text-gray-400">
-            <AlertCircle size={11} /> Link unavailable
-          </span>
-        )}
-      </div>
-    </div>
+    </>
   )
 }
