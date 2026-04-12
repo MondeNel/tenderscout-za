@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from database import engine, Base
 from scraper.scheduler import start_scheduler, stop_scheduler
 from scraper.engine import run_scraper
-from routers import auth, user, tenders, search, credits
+from routers import auth, user, tenders, search, credits, proxy
 import logging
 
 logging.basicConfig(
@@ -47,6 +47,7 @@ app.include_router(user.router)
 app.include_router(tenders.router)
 app.include_router(search.router)
 app.include_router(credits.router)
+app.include_router(proxy.router)
 
 
 @app.get("/")
