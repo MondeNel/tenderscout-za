@@ -6,6 +6,12 @@ const AuthContext = createContext(null)
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [lastSearch, setLastSearch] = useState(() => {
+    try {
+      const saved = localStorage.getItem('lastSearch')
+      return saved ? JSON.parse(saved) : { industries: [], provinces: [], keyword: '' }
+    } catch { return { industries: [], provinces: [], keyword: '' } }
+  })
 
   useEffect(() => {
     const token = localStorage.getItem('token')
@@ -30,6 +36,7 @@ export function AuthProvider({ children }) {
   const logoutUser = () => {
     localStorage.removeItem('token')
     localStorage.removeItem('user')
+    localStorage.removeItem('lastSearch')
     setUser(null)
   }
 
@@ -39,8 +46,13 @@ export function AuthProvider({ children }) {
     return res.data
   }
 
+  const saveLastSearch = (filters) => {
+    setLastSearch(filters)
+    localStorage.setItem('lastSearch', JSON.stringify(filters))
+  }
+
   return (
-    <AuthContext.Provider value={{ user, loading, loginUser, logoutUser, refreshUser }}>
+    <AuthContext.Provider value={{ user, loading, loginUser, logoutUser, refreshUser, lastSearch, saveLastSearch }}>
       {children}
     </AuthContext.Provider>
   )

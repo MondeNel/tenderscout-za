@@ -37,7 +37,7 @@ export default function Layout() {
               'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ' +
               (isActive ? 'bg-brand-50 text-brand-700 font-semibold' : 'text-gray-600 hover:bg-gray-100')
             }>
-            <Icon size={17} />{label}
+            <Icon size={17} /><span>{label}</span>
           </NavLink>
         ))}
       </nav>
@@ -72,6 +72,7 @@ export default function Layout() {
         </div>
         <div className="flex items-center gap-3">
           <span className="text-sm font-medium text-brand-600">{user?.credit_balance ?? 0} credits</span>
+          <button onClick={() => setMobileOpen(!mobileOpen)} className="p-1 rounded-md hover:bg-gray-100">
             {mobileOpen ? <X size={20} /> : <Menu size={20} />}
           </button>
         </div>
@@ -81,8 +82,7 @@ export default function Layout() {
       {mobileOpen && (
         <div className="md:hidden fixed inset-0 z-30" onClick={() => setMobileOpen(false)}>
           <div className="absolute inset-0 bg-black bg-opacity-30" />
-          <aside className="absolute top-0 left-0 bottom-0 w-72 bg-white flex flex-col shadow-xl"
-            onClick={e => e.stopPropagation()}>
+          <aside className="absolute top-0 left-0 bottom-0 w-72 bg-white flex flex-col shadow-xl" onClick={e => e.stopPropagation()}>
             <SidebarContent />
           </aside>
         </div>
