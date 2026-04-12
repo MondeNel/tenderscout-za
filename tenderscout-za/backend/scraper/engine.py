@@ -250,16 +250,17 @@ async def run_scraper():
                 update_scraper_status(db, site_name, 0, str(e))
                 logger.error(f"[ENGINE] {site_name} standalone scrape error: {e}")
 
-    db.close()
-
     print_scrape_table(crawl_index, scrape_report)
 
     if total_new > 0:
         try:
-            from notifications import send_tender_notification
-            send_tender_notification(total_new)
+            from notifications import send_admin_notification, send_user_alerts
+            send_admin_notification(total_new)
+            send_user_alerts(db)
         except Exception as e:
             logger.warning(f"[ENGINE] Email notification failed: {e}")
+
+    db.close()
 
     logger.info(f"[ENGINE] ── Cycle complete — {total_new} new tenders ──────")
     return total_new
