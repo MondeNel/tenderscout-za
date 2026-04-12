@@ -18,13 +18,17 @@ const BADGE_COLORS = {
   'General':              'bg-gray-100 text-gray-600',
 }
 
-function timeAgo(dateStr) {
-  const diff = Date.now() - new Date(dateStr).getTime()
-  const mins = Math.floor(diff / 60000)
-  if (mins < 60) return mins + 'm ago'
-  const hrs = Math.floor(mins / 60)
-  if (hrs < 24) return hrs + 'h ago'
-  return Math.floor(hrs / 24) + 'd ago'
+function formatDate(dateStr) {
+  if (!dateStr) return ''
+  const d = new Date(dateStr)
+  return d.toLocaleString('en-ZA', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })
 }
 
 function isValidUrl(url) {
@@ -70,7 +74,7 @@ export default function TenderCard({ tender, showBadgeColor = true }) {
             </span>
           )}
           <span className="flex items-center gap-1 text-sm text-gray-500">
-            <Clock size={12} />{timeAgo(tender.scraped_at)}
+            <Clock size={12} />{formatDate(tender.scraped_at)}
           </span>
         </div>
 

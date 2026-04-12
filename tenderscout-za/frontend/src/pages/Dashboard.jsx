@@ -90,7 +90,7 @@ export default function Dashboard() {
       <div className="flex items-start justify-between mb-4 md:mb-6">
         <div>
           <h1 className="text-lg md:text-xl font-semibold text-gray-900">
-            Good {new Date().getHours() < 12 ? 'morning' : 'afternoon'}, {user?.full_name?.split(' ')[0]}
+            {new Date().getHours() < 12 ? 'Good morning' : new Date().getHours() < 17 ? 'Good afternoon' : 'Good evening'}, {user?.full_name?.split(' ')[0]}
           </h1>
           <p className="text-sm md:text-base text-gray-500 mt-0.5">
             {total} tenders
