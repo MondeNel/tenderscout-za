@@ -8,7 +8,6 @@ logger = logging.getLogger(__name__)
 
 scheduler = AsyncIOScheduler()
 
-
 def start_scheduler():
     interval = int(os.getenv("SCRAPE_INTERVAL_SECONDS", 60))
     scheduler.add_job(
@@ -21,7 +20,6 @@ def start_scheduler():
     )
     scheduler.start()
     logger.info(f"[SCHEDULER] Started - scraping every {interval}s")
-
 
 def stop_scheduler():
     scheduler.shutdown()

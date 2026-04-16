@@ -68,6 +68,12 @@ export default function TenderCard({ tender, showBadgeColor = true }) {
               <Building2 size={12} />{tender.issuing_body}
             </span>
           )}
+          {/* Municipality (new) */}
+          {tender.municipality && (
+            <span className="flex items-center gap-1 text-sm text-gray-500">
+              <Building2 size={12} />{tender.municipality}
+            </span>
+          )}
           {tender.province && (
             <span className="flex items-center gap-1 text-sm text-gray-500">
               <MapPin size={12} />{tender.town ? tender.town + ', ' : ''}{tender.province}
