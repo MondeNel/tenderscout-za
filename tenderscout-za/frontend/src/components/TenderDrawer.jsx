@@ -6,6 +6,8 @@ import 'react-pdf/dist/Page/TextLayer.css'
 
 pdfjs.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'
 
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+
 function DetailRow({ label, value, valueClass }) {
   if (!value) return null
   return (
@@ -61,6 +63,8 @@ function FallbackView({ tender, docUrl, pdfError, onDownload, isDirectDoc }) {
         <DetailRow label="Closing date" value={tender.closing_date} valueClass="text-sm text-red-500 font-medium" />
         <DetailRow label="Reference" value={tender.reference_number} valueClass="text-sm text-gray-600 font-mono" />
         <DetailRow label="Province" value={province} valueClass="text-sm text-gray-600" />
+        <DetailRow label="Municipality" value={tender.municipality} valueClass="text-sm text-gray-600" />
+        <DetailRow label="Town" value={tender.town} valueClass="text-sm text-gray-600" />
       </div>
 
       <div className="flex gap-3">
@@ -156,7 +160,7 @@ export default function TenderDrawer({ tender, onClose }) {
     if (!docUrl) return
     const safeName = tender.title.slice(0, 60).replace(/[^a-zA-Z0-9 ]/g, '') + '.pdf'
     try {
-      const proxyUrl = `http://localhost:8000/proxy/pdf?url=${encodeURIComponent(docUrl)}`
+      const proxyUrl = `${API_URL}/proxy/pdf?url=${encodeURIComponent(docUrl)}`
       const response = await fetch(proxyUrl)
 
       console.log('[Download] status:', response.status)
@@ -169,7 +173,6 @@ export default function TenderDrawer({ tender, onClose }) {
 
       if (blob.size === 0) throw new Error('Empty response from proxy')
 
-      // Force PDF mime type if blob came back as octet-stream
       const pdfBlob = new Blob([blob], { type: 'application/pdf' })
       const objectUrl = URL.createObjectURL(pdfBlob)
       const a = document.createElement('a')
@@ -181,7 +184,6 @@ export default function TenderDrawer({ tender, onClose }) {
       setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
     } catch (err) {
       console.error('[Download] failed:', err)
-      // Fallback: open directly in new tab
       window.open(docUrl, '_blank')
     }
   }
@@ -197,7 +199,7 @@ export default function TenderDrawer({ tender, onClose }) {
       ? ((tender.town ? tender.town + ', ' : '') + tender.province)
       : null,
     tender.closing_date ? ('Closes ' + tender.closing_date) : null,
-  ].filter(Boolean).join(' · ')
+  ].filter(Boolean).join(' â€¢ ')
 
   return (
     <div>

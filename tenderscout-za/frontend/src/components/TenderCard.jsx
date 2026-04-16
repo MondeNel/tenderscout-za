@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ExternalLink, MapPin, Clock, Building2, AlertCircle, FileText } from 'lucide-react'
+import { ExternalLink, MapPin, Clock, Building2, AlertCircle, FileText, Calendar } from 'lucide-react'
 import TenderDrawer from './TenderDrawer'
 
 const BADGE_COLORS = {
@@ -15,20 +15,43 @@ const BADGE_COLORS = {
   'Catering':             'bg-rose-50 text-rose-700',
   'Healthcare':           'bg-red-50 text-red-700',
   'Consulting':           'bg-purple-50 text-purple-700',
+  'Transport & Logistics': 'bg-sky-50 text-sky-700',
+  'Landscaping':          'bg-emerald-50 text-emerald-700',
   'General':              'bg-gray-100 text-gray-600',
 }
 
 function formatDate(dateStr) {
-  if (!dateStr) return ''
-  const d = new Date(dateStr)
-  return d.toLocaleString('en-ZA', {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  })
+  if (!dateStr) return null
+  try {
+    const d = new Date(dateStr)
+    // Check if date is valid
+    if (isNaN(d.getTime())) return null
+    return d.toLocaleDateString('en-ZA', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+    })
+  } catch {
+    return null
+  }
+}
+
+function formatDateTime(dateStr) {
+  if (!dateStr) return null
+  try {
+    const d = new Date(dateStr)
+    if (isNaN(d.getTime())) return null
+    return d.toLocaleString('en-ZA', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    })
+  } catch {
+    return null
+  }
 }
 
 function isValidUrl(url) {
@@ -46,6 +69,27 @@ export default function TenderCard({ tender, showBadgeColor = true }) {
   const validUrl = isValidUrl(linkUrl)
   const isPdf = linkUrl?.toLowerCase().includes('.pdf') ||
                 linkUrl?.toLowerCase().includes('phocadownload')
+
+  // Determine what date to show
+  const postedDate = formatDate(tender.posted_date)
+  const scrapedDate = formatDateTime(tender.scraped_at)
+  
+  let dateDisplay = null
+  let dateLabel = ''
+  
+  if (postedDate) {
+    dateDisplay = postedDate
+    dateLabel = 'Posted'
+  } else if (scrapedDate) {
+    dateDisplay = scrapedDate
+    dateLabel = 'Discovered'
+  }
+
+  // Build location string
+  const locationParts = []
+  if (tender.town) locationParts.push(tender.town)
+  if (tender.province) locationParts.push(tender.province)
+  const location = locationParts.length > 0 ? locationParts.join(', ') : null
 
   return (
     <>
@@ -68,25 +112,28 @@ export default function TenderCard({ tender, showBadgeColor = true }) {
               <Building2 size={12} />{tender.issuing_body}
             </span>
           )}
-          {/* Municipality (new) */}
-          {tender.municipality && (
+          {tender.municipality && !tender.issuing_body?.includes(tender.municipality) && (
             <span className="flex items-center gap-1 text-sm text-gray-500">
               <Building2 size={12} />{tender.municipality}
             </span>
           )}
-          {tender.province && (
+          {location && (
             <span className="flex items-center gap-1 text-sm text-gray-500">
-              <MapPin size={12} />{tender.town ? tender.town + ', ' : ''}{tender.province}
+              <MapPin size={12} />{location}
             </span>
           )}
-          <span className="flex items-center gap-1 text-sm text-gray-500">
-            <Clock size={12} />{formatDate(tender.scraped_at)}
-          </span>
+          {dateDisplay && (
+            <span className="flex items-center gap-1 text-sm text-gray-500">
+              <Calendar size={12} />
+              <span className="text-gray-400 mr-1">{dateLabel}:</span>
+              {dateDisplay}
+            </span>
+          )}
         </div>
 
         <div className="flex items-center justify-between pt-2 border-t border-gray-100">
           {tender.closing_date
-            ? <span className="text-sm text-red-500">Closes {tender.closing_date}</span>
+            ? <span className="text-sm text-red-500 font-medium">Closes {tender.closing_date}</span>
             : <span className="text-sm text-gray-400">{tender.source_site}</span>
           }
           {validUrl ? (

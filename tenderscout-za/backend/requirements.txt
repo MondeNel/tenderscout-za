@@ -17,3 +17,5 @@ fake-useragent==1.5.1
 # FIX: added email-validator, required by pydantic EmailStr
 email-validator==2.1.1
 dateparser>=1.2.0
+playwright>=1.40.0
+cloudscraper>=1.2.60 
