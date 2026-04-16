@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from database import get_db
 import models, schemas
-import auth as auth_utils
+import auth_utils  # FIX: was importing from wrong module
 import os
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
@@ -32,7 +32,10 @@ def register(user_data: schemas.UserRegister, db: Session = Depends(get_db)):
     ))
     db.commit()
 
-    return {"access_token": auth_utils.create_access_token({"sub": user.email}), "token_type": "bearer"}
+    return {
+        "access_token": auth_utils.create_access_token({"sub": user.email}),
+        "token_type": "bearer"
+    }
 
 
 @router.post("/login", response_model=schemas.Token)
@@ -41,4 +44,7 @@ def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
     if not user or not auth_utils.verify_password(credentials.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
-    return {"access_token": auth_utils.create_access_token({"sub": user.email}), "token_type": "bearer"}
+    return {
+        "access_token": auth_utils.create_access_token({"sub": user.email}),
+        "token_type": "bearer"
+    }

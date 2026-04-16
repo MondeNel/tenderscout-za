@@ -11,53 +11,37 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-# Keywords that suggest a URL is tender-related
 TENDER_KEYWORDS = [
     "tender", "bid", "rfq", "rfp", "quotation", "procurement",
-    "supply", "contract", "bids", "tenders", "sourcing", "award"
+    "supply", "contract", "bids", "tenders", "sourcing", "award",
 ]
 
-# Paths disallowed regardless of robots.txt (common admin/login paths)
 SKIP_PATH_FRAGMENTS = [
     "/login", "/admin", "/logout", "/register", "/wp-admin",
     "/cart", "/checkout", "?s=", "/tag/", "/category/feed",
-    "/newsletter",
-    "/news-and-media",
-    "/media-releases",
-    "/budget/",
-    "/performance-contracts",
-    "/long-term-borrowing",
-    "/annual-report",
-    "/financial-statement",
-    "/organogram",
-    "/vacancy",
-    "/vacancies",
-    "/council",
-    "/gallery",
+    "/newsletter", "/news-and-media", "/media-releases", "/budget/",
+    "/performance-contracts", "/long-term-borrowing", "/annual-report",
+    "/financial-statement", "/organogram", "/vacancy", "/vacancies",
+    "/council", "/gallery",
 ]
 
-# Final URL fragments that indicate a soft 404 / error page
 SOFT_404_FRAGMENTS = [
     "/help?e=404", "/error", "/not-found", "404", "/page-not-found",
 ]
 
-# Regex to detect stale year query params (e.g. ?year=2023)
 _STALE_YEAR_RE = re.compile(r'year=(20[0-9]{2})')
-
 
 STRONG_ANCHOR_KEYWORDS = [
     "tender", "bid", "rfq", "rfp", "quotation", "procurement",
     "sourcing", "bids", "tenders",
 ]
 
+
 def _is_tender_url(url: str, anchor_text: str = "") -> bool:
     url_lower = url.lower()
     anchor_lower = anchor_text.lower()
-    # URL path contains a keyword � structural signal, always accept
     if any(kw in url_lower for kw in TENDER_KEYWORDS):
         return True
-    # Anchor-text-only match � require stronger/more specific keyword
-    # to avoid false positives like "performance contracts"
     if any(kw in anchor_lower for kw in STRONG_ANCHOR_KEYWORDS):
         return True
     return False
@@ -69,21 +53,16 @@ def _same_domain(base: str, url: str) -> bool:
 
 def _should_skip(url: str) -> bool:
     lower = url.lower()
-    # Skip downloadable documents — we want listing pages only
     if any(lower.endswith(ext) for ext in [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".zip"]):
         return True
-    # Skip common non-tender admin/nav paths
     if any(frag in lower for frag in SKIP_PATH_FRAGMENTS):
         return True
-    # Phoca Download (Joomla) triggers file downloads via query param — skip them
-    # e.g. ?option=com_phocadownload&...&download=355:some-file
     if "download=" in lower:
         return True
     return False
 
 
 def _is_stale_year_url(url: str) -> bool:
-    """Returns True if the URL targets a year older than the current year."""
     match = _STALE_YEAR_RE.search(url)
     if match:
         year = int(match.group(1))
@@ -92,10 +71,6 @@ def _is_stale_year_url(url: str) -> bool:
 
 
 def _is_soft_404(final_url: str) -> bool:
-    """
-    Detects soft 404s — pages where the server followed a redirect and
-    returned HTTP 200 but landed on an error/not-found page.
-    """
     lower = final_url.lower()
     return any(frag in lower for frag in SOFT_404_FRAGMENTS)
 
@@ -117,16 +92,8 @@ async def crawl_site(
     max_pages: int = 50,
     polite_delay: float = 1.0,
 ) -> List[Dict]:
-    """
-    BFS crawler. Starts at seed_url, walks internal links up to max_depth.
-    Returns a list of verified live URLs that appear to be tender-related.
-
-    Each result dict contains:
-        url, depth, status_code, discovered_at, seed_url
-    """
     visited: Set[str] = set()
     results: List[Dict] = []
-    # Queue entries: (url, depth)
     queue: List[tuple] = [(seed_url, 0)]
     robots = _load_robots(seed_url)
 
@@ -141,10 +108,7 @@ async def crawl_site(
     }
 
     async with httpx.AsyncClient(
-        timeout=15,
-        headers=headers,
-        follow_redirects=True,
-        verify=False,
+        timeout=15, headers=headers, follow_redirects=True, verify=False
     ) as client:
         pages_visited = 0
 
@@ -169,7 +133,6 @@ async def crawl_site(
                 response = await client.get(url)
                 pages_visited += 1
 
-                # Detect soft 404s — redirected to an error page but returned 200
                 final_url = str(response.url)
                 if _is_soft_404(final_url):
                     logger.debug(f"[CRAWLER] Soft 404: {url} → {final_url}")
@@ -179,7 +142,6 @@ async def crawl_site(
                     logger.debug(f"[CRAWLER] {response.status_code} — {url}")
                     continue
 
-                # Record as a verified live tender-related URL
                 results.append({
                     "url": url,
                     "depth": depth,
@@ -188,20 +150,14 @@ async def crawl_site(
                     "seed_url": seed_url,
                 })
 
-                # Don't go deeper than max_depth
                 if depth >= max_depth:
                     continue
 
-                # Parse page and enqueue internal tender links
                 soup = BeautifulSoup(response.text, "lxml")
                 for tag in soup.find_all("a", href=True):
                     href = tag["href"].strip()
                     anchor = tag.get_text(strip=True)
-
-                    # Resolve relative URLs
-                    full_url = urljoin(url, href)
-                    # Strip fragment identifiers
-                    full_url = full_url.split("#")[0]
+                    full_url = urljoin(url, href).split("#")[0]
 
                     if not full_url.startswith("http"):
                         continue
@@ -233,86 +189,77 @@ async def crawl_site(
 
 
 # ---------------------------------------------------------------------------
-# Site configs — mirrors CITY_PORTALS but adds crawler tuning per site
+# Crawl targets — mirrors CITY_PORTALS
 # ---------------------------------------------------------------------------
 
 CRAWL_TARGETS = [
-    {
-        "name": "City of Cape Town",
-        "seed_url": "https://www.capetown.gov.za/work/tenders",
-        "max_depth": 2,
-        "max_pages": 30,
-    },
-    {
-        "name": "City of Johannesburg",
-        "seed_url": "https://www.joburg.org.za/work_/Pages/Tenders/Tenders.aspx",
-        "max_depth": 2,
-        "max_pages": 30,
-    },
-    {
-        "name": "City of Tshwane",
-        "seed_url": "https://www.tshwane.gov.za/Sites/Departments/Financial-Services/Pages/Tenders.aspx",
-        "max_depth": 2,
-        "max_pages": 30,
-    },
-    {
-        "name": "City of Ekurhuleni",
-        "seed_url": "https://www.ekurhuleni.gov.za/tenders",
-        "max_depth": 3,
-        "max_pages": 50,
-    },
-    {
-        "name": "eThekwini Municipality",
-        "seed_url": "https://www.durban.gov.za/City_Services/finance/SCM/Pages/Quotations-Tenders.aspx",
-        "max_depth": 2,
-        "max_pages": 30,
-    },
-    {
-        "name": "Buffalo City Metro",
-        "seed_url": "https://www.buffalocity.gov.za/tenders",
-        "max_depth": 3,
-        "max_pages": 40,
-    },
-    {
-        "name": "Mangaung Municipality",
-        "seed_url": "https://www.mangaung.co.za/tenders",
-        "max_depth": 2,
-        "max_pages": 30,
-    },
-    {
-        "name": "Nelson Mandela Bay",
-        "seed_url": "https://www.nelsonmandelabay.gov.za/tenders",
-        "max_depth": 3,
-        "max_pages": 40,
-    },
-    {
-        "name": "Siyathemba Municipality",
-        "seed_url": "https://www.siyathemba.gov.za/index.php/tenders-quotations/tenders",
-        "max_depth": 2,
-        "max_pages": 20,
-    },
-    {
-        "name": "Northern Cape DEDAT",
-        "seed_url": "http://www.northern-cape.gov.za/dedat/index.php?option=com_phocadownload&view=category&id=14&Itemid=824",
-        "max_depth": 1,
-        "max_pages": 20,
-    },
-    {
-        "name": "sa-tenders.co.za",
-        "seed_url": "https://sa-tenders.co.za/tenders",
-        "max_depth": 2,
-        "max_pages": 40,
-    },
+    # ── Metros / large cities ──────────────────────────────────────────────
+    {"name": "City of Cape Town",      "seed_url": "https://www.capetown.gov.za/work/tenders",                                                      "max_depth": 2, "max_pages": 30},
+    {"name": "City of Johannesburg",   "seed_url": "https://www.joburg.org.za/work_/Pages/Tenders/Tenders.aspx",                                   "max_depth": 2, "max_pages": 30},
+    {"name": "City of Tshwane",        "seed_url": "https://www.tshwane.gov.za/Sites/Departments/Financial-Services/Pages/Tenders.aspx",           "max_depth": 2, "max_pages": 30},
+    {"name": "City of Ekurhuleni",     "seed_url": "https://www.ekurhuleni.gov.za/tenders",                                                        "max_depth": 3, "max_pages": 50},
+    {"name": "eThekwini Municipality", "seed_url": "https://www.durban.gov.za/City_Services/finance/SCM/Pages/Quotations-Tenders.aspx",            "max_depth": 2, "max_pages": 30},
+    {"name": "Buffalo City Metro",     "seed_url": "https://www.buffalocity.gov.za/tenders",                                                       "max_depth": 3, "max_pages": 40},
+    {"name": "Mangaung Municipality",  "seed_url": "https://www.mangaung.co.za/tenders",                                                           "max_depth": 2, "max_pages": 30},
+    {"name": "Nelson Mandela Bay",     "seed_url": "https://www.nelsonmandelabay.gov.za/tenders",                                                  "max_depth": 3, "max_pages": 40},
+
+    # ── Northern Cape — provincial ──────────────────────────────────────────
+    {"name": "Northern Cape Provincial Government", "seed_url": "https://www.ncgov.co.za/tenders",                                                 "max_depth": 3, "max_pages": 40},
+    {"name": "Northern Cape DEDAT",    "seed_url": "http://www.northern-cape.gov.za/dedat/index.php?option=com_phocadownload&view=category&id=14&Itemid=824", "max_depth": 1, "max_pages": 20},
+
+    # ── Northern Cape — Frances Baard ──────────────────────────────────────
+    {"name": "Sol Plaatje Municipality",     "seed_url": "https://www.solplaatje.org.za/tenders",                   "max_depth": 2, "max_pages": 20},
+    {"name": "Dikgatlong Municipality",      "seed_url": "https://www.dikgatlong.gov.za/tenders",                   "max_depth": 2, "max_pages": 15},
+    {"name": "Magareng Municipality",        "seed_url": "https://www.magareng.gov.za/index.php/tenders",           "max_depth": 2, "max_pages": 15},
+    {"name": "Phokwane Municipality",        "seed_url": "https://www.phokwane.gov.za/tenders",                     "max_depth": 2, "max_pages": 15},
+    {"name": "Frances Baard District",       "seed_url": "https://www.francesbaarddc.gov.za/tenders",               "max_depth": 2, "max_pages": 20},
+
+    # ── Northern Cape — ZF Mgcawu ───────────────────────────────────────────
+    {"name": "Dawid Kruiper Municipality",   "seed_url": "https://www.dawidkruiper.gov.za/tenders",                 "max_depth": 2, "max_pages": 20},
+    {"name": "Kai Garib Municipality",       "seed_url": "https://www.kaigariblm.gov.za/tenders",                  "max_depth": 2, "max_pages": 15},
+    {"name": "Khara Hais Municipality",      "seed_url": "https://www.kharahais.gov.za/tenders",                   "max_depth": 2, "max_pages": 15},
+    {"name": "Kheis Municipality",           "seed_url": "https://www.kheis.gov.za/tenders",                       "max_depth": 2, "max_pages": 15},
+    {"name": "Tsantsabane Municipality",     "seed_url": "https://www.tsantsabane.gov.za/index.php/tenders",       "max_depth": 2, "max_pages": 15},
+    {"name": "ZF Mgcawu District",           "seed_url": "https://www.zfmgcawudc.gov.za/tenders",                  "max_depth": 2, "max_pages": 20},
+
+    # ── Northern Cape — Namakwa ─────────────────────────────────────────────
+    {"name": "Richtersveld Municipality",    "seed_url": "https://www.richtersveld.gov.za/tenders",                "max_depth": 2, "max_pages": 15},
+    {"name": "Nama Khoi Municipality",       "seed_url": "https://www.namakhoi.gov.za/tenders",                    "max_depth": 2, "max_pages": 15},
+    {"name": "Kamiesberg Municipality",      "seed_url": "https://www.kamiesberg.gov.za/tenders",                  "max_depth": 2, "max_pages": 15},
+    {"name": "Hantam Municipality",          "seed_url": "https://www.hantam.gov.za/tenders",                      "max_depth": 2, "max_pages": 15},
+    {"name": "Karoo Hoogland Municipality",  "seed_url": "https://www.karoohoogland.gov.za/tenders",               "max_depth": 2, "max_pages": 15},
+    {"name": "Khai-Ma Municipality",         "seed_url": "https://www.khai-ma.gov.za/tenders",                     "max_depth": 2, "max_pages": 15},
+    {"name": "Namakwa District",             "seed_url": "https://www.namakwadc.gov.za/tenders",                   "max_depth": 2, "max_pages": 20},
+
+    # ── Northern Cape — Pixley ka Seme ──────────────────────────────────────
+    {"name": "Siyathemba Municipality",      "seed_url": "https://www.siyathemba.gov.za/index.php/tenders-quotations/tenders", "max_depth": 2, "max_pages": 20},
+    {"name": "Ubuntu Municipality",          "seed_url": "https://www.ubuntu.gov.za/tenders",                      "max_depth": 2, "max_pages": 15},
+    {"name": "Umsobomvu Municipality",       "seed_url": "https://www.umsobomvu.gov.za/tenders",                   "max_depth": 2, "max_pages": 15},
+    {"name": "Emthanjeni Municipality",      "seed_url": "https://www.emthanjeni.gov.za/tenders",                  "max_depth": 2, "max_pages": 15},
+    {"name": "Kareeberg Municipality",       "seed_url": "https://www.kareeberg.gov.za/tenders",                   "max_depth": 2, "max_pages": 15},
+    {"name": "Renosterberg Municipality",    "seed_url": "https://www.renosterberg.gov.za/tenders",                "max_depth": 2, "max_pages": 15},
+    {"name": "Thembelihle Municipality",     "seed_url": "https://www.thembelihle.gov.za/tenders",                 "max_depth": 2, "max_pages": 15},
+    {"name": "Siyancuma Municipality",       "seed_url": "https://www.siyancuma.gov.za/tenders",                   "max_depth": 2, "max_pages": 15},
+    {"name": "Pixley ka Seme District",      "seed_url": "https://www.pixleydc.gov.za/tenders",                    "max_depth": 2, "max_pages": 20},
+
+    # ── Northern Cape — John Taolo Gaetsewe ─────────────────────────────────
+    {"name": "Joe Morolong Municipality",    "seed_url": "https://www.joemorolog.gov.za/tenders",                  "max_depth": 2, "max_pages": 15},
+    {"name": "Gamagara Municipality",        "seed_url": "https://www.gamagara.gov.za/tenders",                    "max_depth": 2, "max_pages": 15},
+    {"name": "Ga-Segonyana Municipality",    "seed_url": "https://www.gasegonyana.gov.za/tenders",                 "max_depth": 2, "max_pages": 15},
+    {"name": "John Taolo Gaetsewe District", "seed_url": "https://www.johntaologaetsewedc.gov.za/tenders",        "max_depth": 2, "max_pages": 20},
+
+    # ── Aggregators ──────────────────────────────────────────────────────────
+    {"name": "sa-tenders.co.za",                     "seed_url": "https://sa-tenders.co.za/tenders",                                              "max_depth": 2, "max_pages": 40},
+    {"name": "Municipalities.co.za (Northern Cape)", "seed_url": "https://municipalities.co.za/tenders/index/7/northern-cape",                    "max_depth": 2, "max_pages": 30},
+    {"name": "eTenders Portal",                      "seed_url": "https://www.etenders.gov.za",                                                   "max_depth": 2, "max_pages": 40},
+    {"name": "EasyTenders (Northern Cape)",          "seed_url": "https://easytenders.co.za/tenders-in/northern-cape",                           "max_depth": 2, "max_pages": 30},
+    {"name": "OnlineTenders (Northern Cape)",        "seed_url": "https://www.onlinetenders.co.za/tenders/northern-cape",                        "max_depth": 2, "max_pages": 30},
+    {"name": "TenderAlerts",                         "seed_url": "https://tenderalerts.co.za",                                                   "max_depth": 2, "max_pages": 30},
+    {"name": "tendersbulletins.co.za (Northern Cape)", "seed_url": "https://tendersbulletins.co.za/location/northern-cape",                      "max_depth": 2, "max_pages": 30},
 ]
 
 
 async def run_crawler() -> Dict[str, List[Dict]]:
-    """
-    Runs the crawler across all CRAWL_TARGETS concurrently (per-site sequential
-    to stay polite, sites run in parallel).
-
-    Returns a dict keyed by site name → list of verified live tender URLs.
-    """
     async def crawl_one(target: Dict) -> tuple:
         urls = await crawl_site(
             seed_url=target["seed_url"],
