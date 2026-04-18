@@ -8,20 +8,21 @@ from database import SessionLocal
 import models
 from scraper.utils import get_headers
 from scraper.crawler import run_crawler, CRAWL_TARGETS
-from scraper.sites import city_portals, sa_tenders, tender_bulletins, js_scraper   # ← added js_scraper
+from scraper.sites import city_portals, sa_tenders, tender_bulletins, js_scraper
+from scraper.sites import etenders as etenders_scraper   # ← new
 from typing import List, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Unified source registry
+# Source registry
 # ---------------------------------------------------------------------------
 
-ALL_CITY_SOURCES      = [{**c, "source_type": "city"}       for c in city_portals.CITY_PORTALS]
+ALL_CITY_SOURCES       = [{**c, "source_type": "city"}       for c in city_portals.CITY_PORTALS]
 ALL_AGGREGATOR_SOURCES = [{**a, "source_type": "aggregator"} for a in sa_tenders.AGGREGATORS]
-ALL_BULLETIN_SOURCES  = [{**s, "source_type": "bulletin"}   for s in tender_bulletins.SOURCES]
-ALL_JS_SOURCES        = [{**j, "source_type": "js"}         for j in js_scraper.JS_SOURCES]   # ← new
-ALL_SOURCES           = ALL_CITY_SOURCES + ALL_AGGREGATOR_SOURCES + ALL_BULLETIN_SOURCES + ALL_JS_SOURCES
+ALL_BULLETIN_SOURCES   = [{**s, "source_type": "bulletin"}   for s in tender_bulletins.SOURCES]
+ALL_JS_SOURCES         = [{**j, "source_type": "js"}         for j in js_scraper.JS_SOURCES]
+ALL_SOURCES            = ALL_CITY_SOURCES + ALL_AGGREGATOR_SOURCES + ALL_BULLETIN_SOURCES + ALL_JS_SOURCES
 
 _SOURCE_BY_NAME: Dict[str, Dict] = {s["name"]: s for s in ALL_SOURCES}
 
@@ -84,7 +85,6 @@ def update_scraper_status(db: Session, site_name: str, count: int, error: str = 
 async def _scrape_source_urls(
     client: httpx.AsyncClient, source: Dict, urls: List[Dict]
 ) -> List[Dict]:
-    """Re-scrape each crawler-verified URL using the appropriate scraper."""
     results = []
     src_type = source.get("source_type", "city")
     for entry in urls:
@@ -128,7 +128,7 @@ def _print_report(crawler_summary: Dict, scrape_report: List[Dict], db: Session)
     print(f"  {'TOTAL':<40} {total_urls:>8}")
     print()
 
-    print("  PHASE 2 — SCRAPER")
+    print("  PHASE 2/3 — SCRAPER")
     print(f"  {'Source':<36} {'Scraped':>8} {'New':>6}   {'Status':<8}")
     print("-" * width)
     total_scraped = total_new = 0
@@ -143,9 +143,9 @@ def _print_report(crawler_summary: Dict, scrape_report: List[Dict], db: Session)
     print("=" * width)
 
     try:
-        db_total = db.query(models.Tender).count()
-        active_total = db.query(models.Tender).filter(models.Tender.is_active == True).count()
-        print(f"  DB: {db_total} total tenders ({active_total} active)")
+        db_total  = db.query(models.Tender).count()
+        db_active = db.query(models.Tender).filter(models.Tender.is_active == True).count()
+        print(f"  DB: {db_total} total tenders ({db_active} active)")
     except Exception:
         pass
     print("=" * width + "\n")
@@ -161,13 +161,12 @@ async def run_scraper():
     scrape_report: List[Dict] = []
     total_new = 0
 
-    # ── Phase 1: Crawl — discover live tender URLs, persist CrawlResults ─────
+    # ── Phase 1: Crawl ────────────────────────────────────────────────────
     logger.info("[ENGINE] Phase 1 — Crawling...")
     crawl_index = await run_crawler(db)
 
-    # ── Phase 2: Scrape crawler-verified URLs (city portals) ─────────────────
+    # ── Phase 2: Scrape crawler-verified city/portal URLs ─────────────────
     logger.info("[ENGINE] Phase 2 — Scraping verified URLs...")
-
     async with httpx.AsyncClient(
         timeout=30, headers=get_headers(), follow_redirects=True, verify=False
     ) as client:
@@ -177,11 +176,9 @@ async def run_scraper():
             if not source:
                 logger.debug(f"[ENGINE] No source config for '{site_name}' — skipping")
                 continue
-
             if not verified_urls:
                 scrape_report.append({"source": site_name, "scraped": 0, "new": 0, "status": "ok"})
                 continue
-
             try:
                 tenders = await _scrape_source_urls(client, source, verified_urls)
                 new = upsert_tenders(db, tenders)
@@ -193,16 +190,14 @@ async def run_scraper():
                 update_scraper_status(db, site_name, 0, str(e))
                 logger.error(f"[ENGINE] {site_name} scrape error: {e}")
 
-        # ── Phase 3: Run aggregator / bulletin listing scrapers ───────────────
+        # ── Phase 3: Aggregator / bulletin scrapers ────────────────────────
         logger.info("[ENGINE] Phase 3 — Aggregator scrapers...")
-
         for source in ALL_AGGREGATOR_SOURCES + ALL_BULLETIN_SOURCES:
             try:
                 if source["source_type"] == "aggregator":
                     tenders = await sa_tenders.scrape_aggregator(client, source)
                 else:
                     tenders = await tender_bulletins.scrape_source(client, source)
-
                 new = upsert_tenders(db, tenders)
                 total_new += new
                 scrape_report.append({"source": source["name"], "scraped": len(tenders), "new": new, "status": "ok"})
@@ -213,24 +208,51 @@ async def run_scraper():
                 update_scraper_status(db, source["name"], 0, str(e))
                 logger.error(f"[ENGINE] {source['name']} aggregator error: {e}")
 
-        # ── Phase 3b: JavaScript‑rendered sites (Playwright) ─────────────────
-        logger.info("[ENGINE] Phase 3b — JavaScript scrapers...")
-        for source in ALL_JS_SOURCES:
-            try:
-                tenders = await js_scraper.scrape_js_source(source)
-                new = upsert_tenders(db, tenders)
-                total_new += new
-                scrape_report.append({"source": source["name"], "scraped": len(tenders), "new": new, "status": "ok"})
-                update_scraper_status(db, source["name"], new)
-            except Exception as e:
-                db.rollback()
-                scrape_report.append({"source": source["name"], "scraped": 0, "new": 0, "status": "error"})
-                update_scraper_status(db, source["name"], 0, str(e))
-                logger.error(f"[ENGINE] {source['name']} JS scraper error: {e}")
+    # ── Phase 3b: JS-rendered sites (EasyTenders via Playwright) ──────────
+    logger.info("[ENGINE] Phase 3b — JS scrapers (EasyTenders)...")
+    for source in ALL_JS_SOURCES:
+        try:
+            tenders = await js_scraper.scrape_js_source(source)
+            new = upsert_tenders(db, tenders)
+            total_new += new
+            scrape_report.append({"source": source["name"], "scraped": len(tenders), "new": new, "status": "ok"})
+            update_scraper_status(db, source["name"], new)
+        except Exception as e:
+            db.rollback()
+            scrape_report.append({"source": source["name"], "scraped": 0, "new": 0, "status": "error"})
+            update_scraper_status(db, source["name"], 0, str(e))
+            logger.error(f"[ENGINE] {source['name']} JS scraper error: {e}")
+
+    # ── Phase 3c: SA-Tenders.co.za (Playwright) ───────────────────────────
+    logger.info("[ENGINE] Phase 3c — SA-Tenders.co.za (Playwright)...")
+    try:
+        tenders = await sa_tenders.scrape_sa_tenders()
+        new = upsert_tenders(db, tenders)
+        total_new += new
+        scrape_report.append({"source": "sa-tenders.co.za", "scraped": len(tenders), "new": new, "status": "ok"})
+        update_scraper_status(db, "sa-tenders.co.za", new)
+    except Exception as e:
+        db.rollback()
+        scrape_report.append({"source": "sa-tenders.co.za", "scraped": 0, "new": 0, "status": "error"})
+        update_scraper_status(db, "sa-tenders.co.za", 0, str(e))
+        logger.error(f"[ENGINE] sa-tenders.co.za error: {e}")
+
+    # ── Phase 3d: eTenders Portal (Playwright) ────────────────────────────
+    logger.info("[ENGINE] Phase 3d — eTenders Portal (Playwright)...")
+    try:
+        tenders = await etenders_scraper.scrape_etenders()
+        new = upsert_tenders(db, tenders)
+        total_new += new
+        scrape_report.append({"source": "eTenders Portal (National)", "scraped": len(tenders), "new": new, "status": "ok"})
+        update_scraper_status(db, "eTenders Portal (National)", new)
+    except Exception as e:
+        db.rollback()
+        scrape_report.append({"source": "eTenders Portal (National)", "scraped": 0, "new": 0, "status": "error"})
+        update_scraper_status(db, "eTenders Portal (National)", 0, str(e))
+        logger.error(f"[ENGINE] eTenders Portal error: {e}")
 
     _print_report(crawl_index, scrape_report, db)
 
-    # ── Notifications ─────────────────────────────────────────────────────────
     if total_new > 0:
         try:
             from notifications import send_admin_notification, send_user_alerts
