@@ -499,15 +499,18 @@ async def scrape_namakwa_district(client, city):
         base = _base(city)
 
         current_month = ""
+        # Remove nav before parsing
+        for tag in soup.select("nav, header, footer, .navbar, #menu, .sidebar, .widget"):
+            tag.decompose()
+
         for el in soup.select("h1, h2, h3, h4, li, p"):
             text = clean_text(el.get_text())
 
-            # Detect month headings
+            # Detect month headings like "April 2026"
             if re.match(r'^(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4}$', text, re.IGNORECASE):
                 current_month = text
                 continue
 
-            # Tender links
             link = el.select_one("a[href]") if el.name in ("li", "p") else None
             if not link:
                 link = el if el.name == "a" and el.get("href") else None
@@ -517,12 +520,22 @@ async def scrape_namakwa_district(client, city):
             title = clean_text(link.get_text())
             if not title or len(title) < 8:
                 continue
-            # Skip orange/old links (they're typically past tenders)
-            # Include if title looks like a tender
+
+            # Skip nav items — only keep if looks like a tender document
+            has_kw = any(kw in title.lower() for kw in
+                         TENDER_KEYWORDS + ["supply", "appointment", "provision", "document",
+                         "record", "laptops", "insurance", "management", "valuation", "rams"])
+            has_doc_ext = any(ext in link.get("href","").lower() for ext in [".pdf", ".doc", ".docx"])
+            if not has_kw and not has_doc_ext:
+                continue
+            # Skip obviously non-tender nav items
+            if title.lower() in {"about ndm", "governance structure", "departments",
+                                  "policies", "vacancies", "media", "tourism", "archives",
+                                  "contact us", "newsletters", "home", "sec 75 info", "sec 71 info"}:
+                continue
+
             href    = link.get("href", "")
             doc_url = href if href.startswith("http") else urljoin(base, href)
-
-            # Annotate with month for context
             full_title = f"{title} ({current_month})" if current_month else title
             res = _build_result(full_title, doc_url, city, city["url"])
             if res:
@@ -535,14 +548,14 @@ async def scrape_namakwa_district(client, city):
 async def scrape_kareeberg(client, city):
     """
     Kareeberg Municipality — static .htm page:
-    Simple list of RFQ links, e.g. "RFQ 21-2026 : Supply and Delivery of Airdac"
+    Simple list of RFQ links: "RFQ 21-2026 : Supply and Delivery of Airdac"
     URL pattern changes each year: written_quotations_2026.htm
+    Only pick up links that start with RFQ, Tender, Bid, or supply keywords.
     """
     results = []
     try:
         r = await client.get(city["url"])
         if r.status_code != 200:
-            # Try current year dynamically
             import datetime
             year = datetime.datetime.now().year
             alt_url = re.sub(r'\d{4}\.htm', f'{year}.htm', city["url"])
@@ -552,10 +565,24 @@ async def scrape_kareeberg(client, city):
         soup = BeautifulSoup(r.text, "lxml")
         base = _base(city)
 
+        # Only the main content area — skip nav
+        for tag in soup.select("nav, header, footer, .navbar, #menu, .sidebar"):
+            tag.decompose()
+
+        KAREEBERG_PATTERNS = re.compile(
+            r'^(RFQ|Tender|Bid|Supply|Appointment|Provision|Request|SUPPLY|TENDER|BID)',
+            re.IGNORECASE
+        )
+        seen = set()
         for link in soup.select("a[href]"):
             title = clean_text(link.get_text())
             if not title or len(title) < 8:
                 continue
+            if not KAREEBERG_PATTERNS.match(title):
+                continue
+            if title in seen:
+                continue
+            seen.add(title)
             href    = link.get("href", "")
             doc_url = href if href.startswith("http") else urljoin(base, href)
             res = _build_result(title, doc_url, city, city["url"])
