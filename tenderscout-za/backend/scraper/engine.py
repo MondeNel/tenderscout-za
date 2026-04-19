@@ -1,5 +1,16 @@
+"""
+scraper/engine.py
+-----------------
+Orchestrates all scraping in a single cycle:
+
+  Phase 1 — HTML sites:      scrape all active HTML sources directly from registry
+  Phase 2 — Playwright sites: EasyTenders, SA-Tenders, eTenders (Playwright)
+
+The old crawler-first approach is removed. Each site is scraped directly at
+its configured URL. This is simpler, faster, and works for all 36 HTML sites.
+"""
+
 import logging
-import hashlib
 import httpx
 from datetime import datetime
 from sqlalchemy.orm import Session
@@ -7,28 +18,13 @@ from sqlalchemy.exc import IntegrityError
 from database import SessionLocal
 import models
 from scraper.utils import get_headers
-from scraper.crawler import run_crawler, CRAWL_TARGETS
-from scraper.sites import city_portals, sa_tenders, tender_bulletins, js_scraper
-from scraper.sites import etenders as etenders_scraper   # ← new
-from typing import List, Dict, Optional
+from scraper.sites.registry import get_html_sources, get_playwright_sources
+from scraper.sites import city_portals, js_scraper
+from scraper.sites import etenders as etenders_scraper
+from scraper.sites import sa_tenders
+from typing import List, Dict
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Source registry
-# ---------------------------------------------------------------------------
-
-ALL_CITY_SOURCES       = [{**c, "source_type": "city"}       for c in city_portals.CITY_PORTALS]
-ALL_AGGREGATOR_SOURCES = [{**a, "source_type": "aggregator"} for a in sa_tenders.AGGREGATORS]
-ALL_BULLETIN_SOURCES   = [{**s, "source_type": "bulletin"}   for s in tender_bulletins.SOURCES]
-ALL_JS_SOURCES         = [{**j, "source_type": "js"}         for j in js_scraper.JS_SOURCES]
-ALL_SOURCES            = ALL_CITY_SOURCES + ALL_AGGREGATOR_SOURCES + ALL_BULLETIN_SOURCES + ALL_JS_SOURCES
-
-_SOURCE_BY_NAME: Dict[str, Dict] = {s["name"]: s for s in ALL_SOURCES}
-
-
-def get_source_by_name(name: str) -> Optional[Dict]:
-    return _SOURCE_BY_NAME.get(name)
 
 
 # ---------------------------------------------------------------------------
@@ -36,6 +32,7 @@ def get_source_by_name(name: str) -> Optional[Dict]:
 # ---------------------------------------------------------------------------
 
 def upsert_tenders(db: Session, tenders: List[Dict]) -> int:
+    """Insert new tenders, skip duplicates by content_hash. Returns new count."""
     new_count = 0
     for t in tenders:
         if not t.get("content_hash") or not t.get("title"):
@@ -45,7 +42,9 @@ def upsert_tenders(db: Session, tenders: List[Dict]) -> int:
                 models.Tender.content_hash == t["content_hash"]
             ).first()
             if not exists:
-                db.add(models.Tender(**{k: v for k, v in t.items() if hasattr(models.Tender, k)}))
+                db.add(models.Tender(**{
+                    k: v for k, v in t.items() if hasattr(models.Tender, k)
+                }))
                 new_count += 1
         except IntegrityError:
             db.rollback()
@@ -68,10 +67,10 @@ def update_scraper_status(db: Session, site_name: str, count: int, error: str = 
         if not status:
             status = models.ScraperStatus(site_name=site_name)
             db.add(status)
-        status.last_scraped_at = datetime.utcnow()
-        status.last_result_count = count
-        status.last_error = error
-        status.is_healthy = (error is None)
+        status.last_scraped_at    = datetime.utcnow()
+        status.last_result_count  = count
+        status.last_error         = error
+        status.is_healthy         = (error is None)
         db.commit()
     except Exception as e:
         db.rollback()
@@ -79,65 +78,27 @@ def update_scraper_status(db: Session, site_name: str, count: int, error: str = 
 
 
 # ---------------------------------------------------------------------------
-# Scraping helpers
+# Report
 # ---------------------------------------------------------------------------
 
-async def _scrape_source_urls(
-    client: httpx.AsyncClient, source: Dict, urls: List[Dict]
-) -> List[Dict]:
-    results = []
-    src_type = source.get("source_type", "city")
-    for entry in urls:
-        url = entry["url"]
-        try:
-            if src_type == "city":
-                city_override = {**source, "url": url}
-                tenders = await city_portals.scrape_city(client, city_override)
-            elif src_type == "aggregator":
-                tenders = await sa_tenders.scrape_detail(client, url, source)
-            elif src_type == "bulletin":
-                tenders = await tender_bulletins.scrape_detail(client, url, source)
-            else:
-                tenders = []
-            results.extend(tenders)
-        except Exception as e:
-            logger.warning(f"[ENGINE] Failed to scrape {url}: {e}")
-    return results
-
-
-# ---------------------------------------------------------------------------
-# Reporting
-# ---------------------------------------------------------------------------
-
-def _print_report(crawler_summary: Dict, scrape_report: List[Dict], db: Session):
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+def _print_report(report: List[Dict], db: Session):
+    now   = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     width = 76
 
     print("\n" + "=" * width)
     print(f"  TENDERSCOUT ZA  |  {now}")
     print("=" * width)
-
-    print("  PHASE 1 — CRAWLER")
-    print(f"  {'Site':<40} {'URLs':>8}")
+    print(f"  {'Source':<36} {'Scraped':>8} {'New':>6}   {'Status'}")
     print("-" * width)
-    total_urls = 0
-    for site, urls in crawler_summary.items():
-        n = len(urls)
-        print(f"     {site:<37} {n:>8}")
-        total_urls += n
-    print(f"  {'TOTAL':<40} {total_urls:>8}")
-    print()
 
-    print("  PHASE 2/3 — SCRAPER")
-    print(f"  {'Source':<36} {'Scraped':>8} {'New':>6}   {'Status':<8}")
-    print("-" * width)
     total_scraped = total_new = 0
-    for row in scrape_report:
+    for row in report:
+        icon       = "[+]" if row["new"] > 0 else "[ ]" if row["status"] == "ok" else "[!]"
         status_str = "OK" if row["status"] == "ok" else "FAILED"
-        icon = "[+]" if row["new"] > 0 else "[ ]" if row["status"] == "ok" else "[!]"
         print(f"  {icon} {row['source']:<33} {row['scraped']:>8} {row['new']:>6}   {status_str}")
         total_scraped += row["scraped"]
-        total_new += row["new"]
+        total_new     += row["new"]
+
     print("-" * width)
     print(f"  {'TOTAL':<36} {total_scraped:>8} {total_new:>6}")
     print("=" * width)
@@ -145,7 +106,7 @@ def _print_report(crawler_summary: Dict, scrape_report: List[Dict], db: Session)
     try:
         db_total  = db.query(models.Tender).count()
         db_active = db.query(models.Tender).filter(models.Tender.is_active == True).count()
-        print(f"  DB: {db_total} total tenders ({db_active} active)")
+        print(f"  DB: {db_total} total  |  {db_active} active")
     except Exception:
         pass
     print("=" * width + "\n")
@@ -156,103 +117,88 @@ def _print_report(crawler_summary: Dict, scrape_report: List[Dict], db: Session)
 # ---------------------------------------------------------------------------
 
 async def run_scraper():
-    logger.info("[ENGINE] ── Cycle start ──────────────────────────────────")
-    db = SessionLocal()
-    scrape_report: List[Dict] = []
-    total_new = 0
+    logger.info("[ENGINE] ── Cycle start ──────────────────────────────────────")
+    db            = SessionLocal()
+    report        = []
+    total_new     = 0
+    html_sources  = get_html_sources()
+    pw_sources    = get_playwright_sources()
 
-    # ── Phase 1: Crawl ────────────────────────────────────────────────────
-    logger.info("[ENGINE] Phase 1 — Crawling...")
-    crawl_index = await run_crawler(db)
+    # ── Phase 1: All HTML sources — direct scrape, no crawler needed ──────────
+    logger.info(f"[ENGINE] Phase 1 — Scraping {len(html_sources)} HTML sources...")
 
-    # ── Phase 2: Scrape crawler-verified city/portal URLs ─────────────────
-    logger.info("[ENGINE] Phase 2 — Scraping verified URLs...")
     async with httpx.AsyncClient(
-        timeout=30, headers=get_headers(), follow_redirects=True, verify=False
+        timeout=30,
+        headers=get_headers(),
+        follow_redirects=True,
+        verify=False,
     ) as client:
 
-        for site_name, verified_urls in crawl_index.items():
-            source = get_source_by_name(site_name)
-            if not source:
-                logger.debug(f"[ENGINE] No source config for '{site_name}' — skipping")
-                continue
-            if not verified_urls:
-                scrape_report.append({"source": site_name, "scraped": 0, "new": 0, "status": "ok"})
-                continue
+        for source in html_sources:
+            name = source["name"]
             try:
-                tenders = await _scrape_source_urls(client, source, verified_urls)
-                new = upsert_tenders(db, tenders)
+                tenders = await city_portals.scrape_city(client, source)
+                new     = upsert_tenders(db, tenders)
                 total_new += new
-                scrape_report.append({"source": site_name, "scraped": len(tenders), "new": new, "status": "ok"})
-                update_scraper_status(db, site_name, new)
-            except Exception as e:
-                scrape_report.append({"source": site_name, "scraped": 0, "new": 0, "status": "error"})
-                update_scraper_status(db, site_name, 0, str(e))
-                logger.error(f"[ENGINE] {site_name} scrape error: {e}")
-
-        # ── Phase 3: Aggregator / bulletin scrapers ────────────────────────
-        logger.info("[ENGINE] Phase 3 — Aggregator scrapers...")
-        for source in ALL_AGGREGATOR_SOURCES + ALL_BULLETIN_SOURCES:
-            try:
-                if source["source_type"] == "aggregator":
-                    tenders = await sa_tenders.scrape_aggregator(client, source)
-                else:
-                    tenders = await tender_bulletins.scrape_source(client, source)
-                new = upsert_tenders(db, tenders)
-                total_new += new
-                scrape_report.append({"source": source["name"], "scraped": len(tenders), "new": new, "status": "ok"})
-                update_scraper_status(db, source["name"], new)
+                report.append({
+                    "source":  name,
+                    "scraped": len(tenders),
+                    "new":     new,
+                    "status":  "ok",
+                })
+                update_scraper_status(db, name, new)
+                logger.info(f"[ENGINE] {name}: {len(tenders)} scraped, {new} new")
             except Exception as e:
                 db.rollback()
-                scrape_report.append({"source": source["name"], "scraped": 0, "new": 0, "status": "error"})
-                update_scraper_status(db, source["name"], 0, str(e))
-                logger.error(f"[ENGINE] {source['name']} aggregator error: {e}")
+                report.append({"source": name, "scraped": 0, "new": 0, "status": "error"})
+                update_scraper_status(db, name, 0, str(e))
+                logger.error(f"[ENGINE] {name} failed: {e}")
 
-    # ── Phase 3b: JS-rendered sites (EasyTenders via Playwright) ──────────
-    logger.info("[ENGINE] Phase 3b — JS scrapers (EasyTenders)...")
-    for source in ALL_JS_SOURCES:
+    # ── Phase 2: Playwright sources ───────────────────────────────────────────
+    logger.info(f"[ENGINE] Phase 2 — Scraping {len(pw_sources)} Playwright sources...")
+
+    for source in pw_sources:
+        name         = source["name"]
+        scrape_type  = source.get("scrape_type", "")
+
         try:
-            tenders = await js_scraper.scrape_js_source(source)
-            new = upsert_tenders(db, tenders)
+            if scrape_type == "etenders_playwright":
+                tenders = await etenders_scraper.scrape_etenders()
+
+            elif scrape_type == "js_playwright" and "sa-tenders" in source["url"]:
+                tenders = await sa_tenders.scrape_sa_tenders()
+
+            elif scrape_type == "js_playwright" and "dkm.gov.za" in source["url"]:
+                # Dawid Kruiper — JS-rendered bids table, scrape with generic Playwright
+                tenders = await js_scraper.scrape_js_source(source)
+
+            elif scrape_type == "js_playwright":
+                tenders = await js_scraper.scrape_js_source(source)
+
+            else:
+                logger.warning(f"[ENGINE] Unknown playwright type '{scrape_type}' for {name}")
+                tenders = []
+
+            new        = upsert_tenders(db, tenders)
             total_new += new
-            scrape_report.append({"source": source["name"], "scraped": len(tenders), "new": new, "status": "ok"})
-            update_scraper_status(db, source["name"], new)
+            report.append({
+                "source":  name,
+                "scraped": len(tenders),
+                "new":     new,
+                "status":  "ok",
+            })
+            update_scraper_status(db, name, new)
+            logger.info(f"[ENGINE] {name}: {len(tenders)} scraped, {new} new")
+
         except Exception as e:
             db.rollback()
-            scrape_report.append({"source": source["name"], "scraped": 0, "new": 0, "status": "error"})
-            update_scraper_status(db, source["name"], 0, str(e))
-            logger.error(f"[ENGINE] {source['name']} JS scraper error: {e}")
+            report.append({"source": name, "scraped": 0, "new": 0, "status": "error"})
+            update_scraper_status(db, name, 0, str(e))
+            logger.error(f"[ENGINE] {name} failed: {e}")
 
-    # ── Phase 3c: SA-Tenders.co.za (Playwright) ───────────────────────────
-    logger.info("[ENGINE] Phase 3c — SA-Tenders.co.za (Playwright)...")
-    try:
-        tenders = await sa_tenders.scrape_sa_tenders()
-        new = upsert_tenders(db, tenders)
-        total_new += new
-        scrape_report.append({"source": "sa-tenders.co.za", "scraped": len(tenders), "new": new, "status": "ok"})
-        update_scraper_status(db, "sa-tenders.co.za", new)
-    except Exception as e:
-        db.rollback()
-        scrape_report.append({"source": "sa-tenders.co.za", "scraped": 0, "new": 0, "status": "error"})
-        update_scraper_status(db, "sa-tenders.co.za", 0, str(e))
-        logger.error(f"[ENGINE] sa-tenders.co.za error: {e}")
+    _print_report(report, db)
 
-    # ── Phase 3d: eTenders Portal (Playwright) ────────────────────────────
-    logger.info("[ENGINE] Phase 3d — eTenders Portal (Playwright)...")
-    try:
-        tenders = await etenders_scraper.scrape_etenders()
-        new = upsert_tenders(db, tenders)
-        total_new += new
-        scrape_report.append({"source": "eTenders Portal (National)", "scraped": len(tenders), "new": new, "status": "ok"})
-        update_scraper_status(db, "eTenders Portal (National)", new)
-    except Exception as e:
-        db.rollback()
-        scrape_report.append({"source": "eTenders Portal (National)", "scraped": 0, "new": 0, "status": "error"})
-        update_scraper_status(db, "eTenders Portal (National)", 0, str(e))
-        logger.error(f"[ENGINE] eTenders Portal error: {e}")
-
-    _print_report(crawl_index, scrape_report, db)
-
+    # ── Notifications ─────────────────────────────────────────────────────────
     if total_new > 0:
         try:
             from notifications import send_admin_notification, send_user_alerts
@@ -262,5 +208,5 @@ async def run_scraper():
             logger.warning(f"[ENGINE] Notification error: {e}")
 
     db.close()
-    logger.info(f"[ENGINE] ── Cycle complete — {total_new} new tenders ──────")
+    logger.info(f"[ENGINE] ── Cycle complete — {total_new} new tenders ──────────")
     return total_new
