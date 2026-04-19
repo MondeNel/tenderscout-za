@@ -568,8 +568,10 @@ async def scrape_kareeberg(client, city):
 
 async def scrape_ga_segonyana(client, city):
     """
-    Ga-Segonyana Municipality — simple HTML table:
-    Columns: Tender Advert (link) | Closing Date
+    Ga-Segonyana: HTML table with Tender Advert | Closing Date
+    PLUS a large list of PDF links outside the table.
+    PDF hrefs are relative: "downloads/Bid Document - GAS Q40..."
+    Base URL must be the page URL (not domain root).
     """
     results = []
     try:
@@ -577,25 +579,57 @@ async def scrape_ga_segonyana(client, city):
         if r.status_code != 200:
             return results
         soup = BeautifulSoup(r.text, "lxml")
-        base = _base(city)
+        # Use the actual page URL as base for relative links
+        page_base = city["url"].rsplit("/", 1)[0] + "/"
 
+        seen = set()
+
+        # Strategy 1: table rows (Tender Advert | Closing Date)
         for table in soup.select("table"):
             for row in table.select("tr"):
                 cells = row.select("td")
-                if len(cells) < 2:
+                if len(cells) < 1:
                     continue
-                link_el  = cells[0].select_one("a[href]")
+                link_el = cells[0].select_one("a[href]")
                 if not link_el:
                     continue
-                title    = clean_text(link_el.get_text())
-                href     = link_el.get("href", "")
-                closing  = clean_text(cells[1].get_text()) if len(cells) > 1 else ""
-                doc_url  = href if href.startswith("http") else urljoin(base, href)
-                if not title or len(title) < 8:
+                title   = clean_text(link_el.get_text())
+                href    = link_el.get("href", "")
+                closing = clean_text(cells[1].get_text()) if len(cells) > 1 else ""
+                if not title or len(title) < 8 or title in seen:
                     continue
+                # Resolve relative URLs from page base
+                if href.startswith("http"):
+                    doc_url = href
+                elif href.startswith("/"):
+                    doc_url = urljoin(_base(city), href)
+                else:
+                    doc_url = page_base + href
+                seen.add(title)
                 res = _build_result(title, doc_url, city, city["url"], closing)
                 if res:
                     results.append(res)
+
+        # Strategy 2: all PDF/download links on the page
+        for link in soup.select("a[href]"):
+            href  = link.get("href", "")
+            title = clean_text(link.get_text())
+            if not title or len(title) < 8 or title in seen:
+                continue
+            if not any(kw in title.lower() for kw in ["bid", "tender", "rfq", "supply", "appointment", "provision"]):
+                continue
+            # Resolve relative path
+            if href.startswith("http"):
+                doc_url = href
+            elif href.startswith("/"):
+                doc_url = urljoin(_base(city), href)
+            else:
+                doc_url = page_base + href
+            seen.add(title)
+            res = _build_result(title, doc_url, city, city["url"])
+            if res:
+                results.append(res)
+
     except Exception as e:
         logger.exception(f"{city['name']} ga_segonyana: {e}")
     return results

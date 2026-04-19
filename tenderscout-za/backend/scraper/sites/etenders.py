@@ -1,6 +1,9 @@
 """
-scraper/sites/etenders.py — eTenders Portal scraper
-Confirmed working. Speed fix: dismiss modal ONCE at startup via JS, never again.
+scraper/sites/etenders.py
+--------------------------
+Scraper for https://www.etenders.gov.za/Home/opportunities?id=1
+
+Uses async_playwright (not sync_playwright) to work inside FastAPI's event loop on Windows.
 """
 
 import asyncio
@@ -23,10 +26,25 @@ SOURCE_SITE   = "etenders.gov.za"
 MAX_PAGES     = 20
 ROWS_PER_PAGE = 100
 
+_MODAL_JS = """
+() => {
+    document.querySelectorAll('.modal').forEach(m => {
+        m.classList.remove('show');
+        m.style.display = 'none';
+        m.setAttribute('aria-hidden', 'true');
+        m.removeAttribute('aria-modal');
+    });
+    document.querySelectorAll('.modal-backdrop').forEach(b => b.remove());
+    document.body.classList.remove('modal-open');
+    document.body.style.overflow = '';
+    document.body.style.paddingRight = '';
+    if (window.jQuery) { try { jQuery.fn.modal = function() { return this; }; } catch(e) {} }
+    if (window.bootstrap && window.bootstrap.Modal) {
+        window.bootstrap.Modal.prototype.show = function() {};
+    }
+}
+"""
 
-# ---------------------------------------------------------------------------
-# Date parsing
-# ---------------------------------------------------------------------------
 
 def _parse_date(text: str) -> str:
     if not text:
@@ -51,80 +69,6 @@ def _parse_date(text: str) -> str:
         return datetime.today().strftime("%d/%m/%Y")
     return text
 
-
-# ---------------------------------------------------------------------------
-# Modal dismissal — run ONCE, permanently patch the site
-# ---------------------------------------------------------------------------
-
-_MODAL_JS = """
-() => {
-    // Hide all Bootstrap modals immediately
-    document.querySelectorAll('.modal').forEach(m => {
-        m.classList.remove('show');
-        m.style.display = 'none';
-        m.setAttribute('aria-hidden', 'true');
-        m.removeAttribute('aria-modal');
-    });
-    document.querySelectorAll('.modal-backdrop').forEach(b => b.remove());
-    document.body.classList.remove('modal-open');
-    document.body.style.overflow = '';
-    document.body.style.paddingRight = '';
-
-    // Patch Bootstrap modal show() so it never opens again
-    if (window.jQuery) {
-        try {
-            jQuery.fn.modal = function() { return this; };
-        } catch(e) {}
-    }
-    // Also intercept bootstrap Modal constructor
-    if (window.bootstrap && window.bootstrap.Modal) {
-        window.bootstrap.Modal.prototype.show = function() {};
-    }
-}
-"""
-
-
-def _nuke_modals(page) -> None:
-    """Permanently disable modals for the lifetime of this page."""
-    try:
-        page.evaluate(_MODAL_JS)
-        page.keyboard.press("Escape")
-        logger.info("[ETENDERS] Modals permanently disabled")
-    except Exception as e:
-        logger.warning(f"[ETENDERS] Modal nuke failed: {e}")
-
-
-# ---------------------------------------------------------------------------
-# Column detection
-# ---------------------------------------------------------------------------
-
-def _detect_cols(page) -> Dict[str, int]:
-    soup = BeautifulSoup(page.content(), "lxml")
-    for tbl in soup.select("table"):
-        for row in tbl.select("tr")[:5]:
-            cells = row.select("th, td")
-            texts = [c.get_text().strip().lower() for c in cells]
-            if any("description" in t for t in texts):
-                col = {}
-                for i, t in enumerate(texts):
-                    if len(t) < 2:
-                        continue
-                    if "category" in t:
-                        col.setdefault("category", i)
-                    if "description" in t:
-                        col.setdefault("description", i)
-                    if "advertised" in t:
-                        col.setdefault("advertised", i)
-                    if "closing" in t:
-                        col.setdefault("closing", i)
-                logger.info(f"[ETENDERS] Columns: {col}")
-                return col
-    return {}
-
-
-# ---------------------------------------------------------------------------
-# Detail panel parser
-# ---------------------------------------------------------------------------
 
 def _parse_detail(html: str) -> Dict:
     soup = BeautifulSoup(html, "lxml")
@@ -165,10 +109,6 @@ def _parse_detail(html: str) -> Dict:
     return data
 
 
-# ---------------------------------------------------------------------------
-# Build tender
-# ---------------------------------------------------------------------------
-
 def _build_tender(title: str, category: str, detail: Dict, closing_fallback: str) -> Optional[Dict]:
     title = clean_text(title)
     if not title or len(title) < 8:
@@ -207,13 +147,34 @@ def _build_tender(title: str, category: str, detail: Dict, closing_fallback: str
     }
 
 
-# ---------------------------------------------------------------------------
-# Playwright scraper
-# ---------------------------------------------------------------------------
+def _detect_cols(soup: BeautifulSoup) -> Dict[str, int]:
+    for tbl in soup.select("table"):
+        for row in tbl.select("tr")[:5]:
+            cells = row.select("th, td")
+            texts = [c.get_text().strip().lower() for c in cells]
+            if any("description" in t for t in texts):
+                col = {}
+                for i, t in enumerate(texts):
+                    if len(t) < 2:
+                        continue
+                    if "category" in t:
+                        col.setdefault("category", i)
+                    if "description" in t:
+                        col.setdefault("description", i)
+                    if "advertised" in t:
+                        col.setdefault("advertised", i)
+                    if "closing" in t:
+                        col.setdefault("closing", i)
+                if "description" in col:
+                    logger.info(f"[ETENDERS] Columns: {col}")
+                    return col
+    return {}
 
-def _sync_scrape() -> List[Dict]:
+
+async def scrape_etenders() -> List[Dict]:
+    """Async Playwright scraper — works inside FastAPI's event loop."""
     try:
-        from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
+        from playwright.async_api import async_playwright, TimeoutError as PWTimeout
     except ImportError:
         logger.error("[ETENDERS] Playwright not installed")
         return []
@@ -221,42 +182,45 @@ def _sync_scrape() -> List[Dict]:
     results: List[Dict] = []
 
     try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
                 headless=True,
                 args=["--ignore-certificate-errors", "--disable-web-security",
                       "--no-sandbox", "--disable-dev-shm-usage"],
             )
-            context = browser.new_context(
+            context = await browser.new_context(
                 ignore_https_errors=True,
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
                 viewport={"width": 1440, "height": 900},
             )
-            page = context.new_page()
+            page = await context.new_page()
 
             logger.info(f"[ETENDERS] Loading {ETENDERS_URL}")
-            page.goto(ETENDERS_URL, wait_until="networkidle", timeout=90000)
-            page.wait_for_timeout(2000)
+            await page.goto(ETENDERS_URL, wait_until="networkidle", timeout=90000)
+            await page.wait_for_timeout(2000)
 
-            # ── Kill the modal ONCE, permanently ─────────────────────────
-            _nuke_modals(page)
+            # Kill modal permanently
+            await page.evaluate(_MODAL_JS)
+            await page.keyboard.press("Escape")
+            await page.wait_for_timeout(500)
+            logger.info("[ETENDERS] Modal dismissed")
 
             # Try set page size to 100
             try:
-                sel_el = page.query_selector("select[name$='_length']")
+                sel_el = await page.query_selector("select[name$='_length']")
                 if sel_el:
-                    sel_el.select_option(value="100")
-                    page.wait_for_load_state("networkidle", timeout=10000)
-                    _nuke_modals(page)
-                    logger.info("[ETENDERS] Page length set to 100")
+                    await sel_el.select_option(value="100")
+                    await page.wait_for_load_state("networkidle", timeout=10000)
+                    await page.evaluate(_MODAL_JS)
             except Exception:
                 pass
 
-            # ── Detect columns ────────────────────────────────────────────
-            col = _detect_cols(page)
+            # Detect columns
+            soup0 = BeautifulSoup(await page.content(), "lxml")
+            col = _detect_cols(soup0)
             if "description" not in col:
-                logger.error("[ETENDERS] Description column not found")
-                browser.close()
+                logger.error("[ETENDERS] Cannot find description column")
+                await browser.close()
                 return []
 
             seen: set = set()
@@ -264,13 +228,13 @@ def _sync_scrape() -> List[Dict]:
 
             while page_num < MAX_PAGES:
                 page_num += 1
-                _nuke_modals(page)  # keep modals dead on each page
+                await page.evaluate(_MODAL_JS)
 
-                # Find live data rows (skip first 2: title row + header row)
-                all_rows = page.query_selector_all("table tbody tr")
+                all_rows = await page.query_selector_all("table tbody tr")
+                # Skip header rows
                 data_start = 0
                 for i, row_el in enumerate(all_rows[:5]):
-                    txt = (row_el.inner_text() or "").lower()
+                    txt = (await row_el.inner_text() or "").lower()
                     if "tender description" in txt or ("category" in txt and "closing" in txt):
                         data_start = i + 1
                         break
@@ -284,7 +248,7 @@ def _sync_scrape() -> List[Dict]:
                 processed = 0
                 for row_el in data_rows[:ROWS_PER_PAGE]:
                     try:
-                        row_html  = row_el.inner_html()
+                        row_html  = await row_el.inner_html()
                         row_soup  = BeautifulSoup(f"<tr>{row_html}</tr>", "lxml")
                         cells     = row_soup.select("td")
 
@@ -294,7 +258,7 @@ def _sync_scrape() -> List[Dict]:
                         title        = c(col.get("description", 2))
                         category     = c(col.get("category", 1))
                         closing_raw  = c(col.get("closing", 5))
-                        closing_fallback = _parse_date(closing_raw)
+                        closing_fb   = _parse_date(closing_raw)
 
                         if not title or len(title) < 8:
                             continue
@@ -303,14 +267,14 @@ def _sync_scrape() -> List[Dict]:
                         if title.lower() in seen:
                             continue
 
-                        # Click expander
-                        first_td = row_el.query_selector("td:first-child")
+                        # Expand row
+                        first_td = await row_el.query_selector("td:first-child")
                         if first_td:
-                            first_td.click()
-                            page.wait_for_timeout(600)  # reduced from 1000ms
+                            await first_td.click()
+                            await page.wait_for_timeout(600)
 
                         # Parse detail panel
-                        updated = BeautifulSoup(page.content(), "lxml")
+                        updated = BeautifulSoup(await page.content(), "lxml")
                         detail_html = ""
                         for el in updated.select("tr, div"):
                             if "organ of state" in el.get_text().lower():
@@ -318,57 +282,55 @@ def _sync_scrape() -> List[Dict]:
                                 break
 
                         detail = _parse_detail(detail_html) if detail_html else {}
+                        if not detail.get("closing_date"):
+                            detail["closing_date"] = closing_fb
 
-                        tender = _build_tender(title, category, detail, closing_fallback)
+                        tender = _build_tender(title, category, detail, closing_fb)
                         if tender:
                             seen.add(title.lower())
                             results.append(tender)
                             processed += 1
 
-                        # Collapse row
+                        # Collapse
                         if first_td:
                             try:
-                                first_td.click()
-                                page.wait_for_timeout(300)  # reduced from 400ms
+                                await first_td.click()
+                                await page.wait_for_timeout(300)
                             except Exception:
                                 pass
 
                     except Exception as e:
                         logger.debug(f"[ETENDERS] Row error: {e}")
 
-                logger.info(f"[ETENDERS] Page {page_num}: {processed} tenders extracted (total {len(results)})")
+                logger.info(f"[ETENDERS] Page {page_num}: {processed} tenders (total {len(results)})")
 
                 # Next page
-                _nuke_modals(page)
+                await page.evaluate(_MODAL_JS)
                 next_btn = (
-                    page.query_selector("#DataTables_Table_0_next:not(.disabled)")
-                    or page.query_selector(".dataTables_paginate .next:not(.disabled)")
-                    or page.query_selector("a.paginate_button.next:not(.disabled)")
-                    or page.query_selector("li.next:not(.disabled) a")
+                    await page.query_selector("#DataTables_Table_0_next:not(.disabled)")
+                    or await page.query_selector(".dataTables_paginate .next:not(.disabled)")
+                    or await page.query_selector("a.paginate_button.next:not(.disabled)")
+                    or await page.query_selector("li.next:not(.disabled) a")
                 )
                 if not next_btn:
                     logger.info("[ETENDERS] No next page — done")
                     break
 
                 try:
-                    next_btn.click()
-                    page.wait_for_load_state("networkidle", timeout=15000)
-                    page.wait_for_timeout(800)
+                    await next_btn.click()
+                    await page.wait_for_load_state("networkidle", timeout=15000)
+                    await page.wait_for_timeout(800)
                 except Exception as e:
                     logger.warning(f"[ETENDERS] Pagination error: {e}")
                     break
 
-            browser.close()
+            await browser.close()
 
     except Exception as e:
         logger.exception(f"[ETENDERS] Scrape failed: {e}")
 
     logger.info(f"[ETENDERS] Final: {len(results)} tenders")
     return results
-
-
-async def scrape_etenders() -> List[Dict]:
-    return await asyncio.to_thread(_sync_scrape)
 
 
 async def scrape() -> List[Dict]:
