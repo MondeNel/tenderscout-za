@@ -383,14 +383,13 @@ ACTIVE_SOURCES: List[Dict] = [
         "notes":                    "~69 tenders — multi-municipality aggregator",
     },
     {
-        "name":                     "EasyTenders (Northern Cape)",
+        "name":                     "EasyTenders",
         "url":                      "https://easytenders.co.za/tenders",
-        "province":                 "Northern Cape",
+        "province":                 None,
         "town":                     None,
         "scrape_type":              "js_playwright",
         "allow_province_detection": True,
-        "notes":                    "~50 tenders — JS-rendered, Playwright required",
-        "query_params":             {"province": "northern-cape"},
+        "notes":                    "ALL provinces — scrapes all 9 province pages. Playwright required.",
     },
     {
         "name":                     "eTenders Portal (National)",
