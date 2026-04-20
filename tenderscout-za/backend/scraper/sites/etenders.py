@@ -1,8 +1,7 @@
 """
-scraper/sites/etenders.py
---------------------------
-eTenders Portal (National) — https://www.etenders.gov.za/Home/opportunities?id=1
-Windows-compatible via playwright_runner.run_sync()
+scraper/sites/etenders.py — eTenders Portal National
+Key fix: data_start was skipping ALL rows. Now correctly identifies header rows
+and starts data extraction from the right position.
 """
 
 import logging
@@ -24,7 +23,6 @@ ETENDERS_URL  = "https://www.etenders.gov.za/Home/opportunities?id=1"
 ETENDERS_BASE = "https://www.etenders.gov.za"
 SOURCE_SITE   = "etenders.gov.za"
 MAX_PAGES     = 20
-ROWS_PER_PAGE = 100
 
 _MODAL_JS = """
 () => {
@@ -38,7 +36,9 @@ _MODAL_JS = """
     document.body.classList.remove('modal-open');
     document.body.style.overflow = '';
     if (window.jQuery) { try { jQuery.fn.modal = function() { return this; }; } catch(e) {} }
-    if (window.bootstrap && window.bootstrap.Modal) { window.bootstrap.Modal.prototype.show = function() {}; }
+    if (window.bootstrap && window.bootstrap.Modal) {
+        window.bootstrap.Modal.prototype.show = function() {};
+    }
 }
 """
 
@@ -53,7 +53,9 @@ def _parse_date(text: str) -> str:
     )
     if m:
         try:
-            return datetime.strptime(f"{m.group(1)} {m.group(2)} {m.group(3)}", "%d %B %Y").strftime("%d/%m/%Y")
+            return datetime.strptime(
+                f"{m.group(1)} {m.group(2)} {m.group(3)}", "%d %B %Y"
+            ).strftime("%d/%m/%Y")
         except Exception:
             pass
     m2 = re.search(r'(\d{2}/\d{2}/\d{4})', text)
@@ -106,30 +108,6 @@ def _parse_detail(html: str) -> Dict:
     return data
 
 
-def _detect_cols(soup: BeautifulSoup) -> Dict[str, int]:
-    col = {}
-    for tbl in soup.select("table"):
-        for row in tbl.select("tr")[:5]:
-            cells = row.select("th, td")
-            texts = [c.get_text().strip().lower() for c in cells]
-            if any("description" in t for t in texts):
-                for i, t in enumerate(texts):
-                    if len(t) < 2:
-                        continue
-                    if "category" in t:
-                        col.setdefault("category", i)
-                    if "description" in t:
-                        col.setdefault("description", i)
-                    if "advertised" in t:
-                        col.setdefault("advertised", i)
-                    if "closing" in t:
-                        col.setdefault("closing", i)
-                if "description" in col:
-                    logger.info(f"[ETENDERS] Column map: {col}")
-                    return col
-    return col
-
-
 def _build_tender(title: str, category: str, detail: Dict, closing_fallback: str) -> Optional[Dict]:
     title = clean_text(title)
     if not title or len(title) < 8:
@@ -151,7 +129,7 @@ def _build_tender(title: str, category: str, detail: Dict, closing_fallback: str
 
     return {
         "title":             title,
-        "description":       f"Tender Type: {detail.get('tender_type','')}. Organ: {organ}. Location: {location}.".strip(),
+        "description":       f"Category: {category}. Organ: {organ}. Location: {location}.".strip(),
         "issuing_body":      organ or "National Government (eTenders)",
         "province":          province,
         "municipality":      municipality,
@@ -168,8 +146,36 @@ def _build_tender(title: str, category: str, detail: Dict, closing_fallback: str
     }
 
 
+def _get_col_map(page_content: str) -> Dict[str, int]:
+    """Find column indices by scanning all table rows for a header row."""
+    soup = BeautifulSoup(page_content, "lxml")
+    col  = {}
+    for tbl in soup.select("table"):
+        for row in tbl.select("tr")[:6]:
+            cells = row.select("th, td")
+            texts = [c.get_text().strip().lower() for c in cells]
+            logger.info(f"[ETENDERS] Row texts: {texts[:8]}")
+            if any("description" in t or "tender description" in t for t in texts):
+                for i, t in enumerate(texts):
+                    if len(t) < 2:
+                        continue
+                    if "category" in t and "category" not in col:
+                        col["category"] = i
+                    if ("description" in t) and "description" not in col:
+                        col["description"] = i
+                    if "advertised" in t and "advertised" not in col:
+                        col["advertised"] = i
+                    if "closing" in t and "closing" not in col:
+                        col["closing"] = i
+                if "description" in col:
+                    logger.info(f"[ETENDERS] Column map: {col}")
+                    return col
+    return col
+
+
 def _sync_scrape(_playwright) -> List[Dict]:
     results: List[Dict] = []
+
     browser = _playwright.chromium.launch(
         headless=True,
         args=["--ignore-certificate-errors", "--disable-web-security",
@@ -177,7 +183,10 @@ def _sync_scrape(_playwright) -> List[Dict]:
     )
     context = browser.new_context(
         ignore_https_errors=True,
-        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
+        user_agent=(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        ),
         viewport={"width": 1440, "height": 900},
     )
     page = context.new_page()
@@ -187,18 +196,20 @@ def _sync_scrape(_playwright) -> List[Dict]:
     page.wait_for_timeout(2000)
     page.evaluate(_MODAL_JS)
 
+    # Try to increase page size to 100
     try:
         sel_el = page.query_selector("select[name$='_length']")
         if sel_el:
             sel_el.select_option(value="100")
             page.wait_for_load_state("networkidle", timeout=10000)
             page.evaluate(_MODAL_JS)
+            logger.info("[ETENDERS] Page size set to 100")
     except Exception:
         pass
 
-    col = _detect_cols(BeautifulSoup(page.content(), "lxml"))
+    col = _get_col_map(page.content())
     if "description" not in col:
-        logger.error("[ETENDERS] Description column not found")
+        logger.error("[ETENDERS] Cannot find description column")
         browser.close()
         return []
 
@@ -209,32 +220,47 @@ def _sync_scrape(_playwright) -> List[Dict]:
         page_num += 1
         page.evaluate(_MODAL_JS)
 
-        all_rows   = page.query_selector_all("table tbody tr")
-        data_start = 0
-        for i, row_el in enumerate(all_rows[:5]):
+        # ── KEY FIX: find data rows correctly ────────────────────────────────
+        # The table has 2 non-data rows at the top:
+        #   Row 0: "currently advertised tenders" title row
+        #   Row 1: column headers (Category | Tender Description | ...)
+        # We find the header row by looking for "description" text,
+        # then all rows AFTER it are data rows.
+        all_rows = page.query_selector_all("table tbody tr")
+        logger.info(f"[ETENDERS] Page {page_num}: {len(all_rows)} total tbody rows")
+
+        # Find the header row index
+        header_idx = -1
+        for i, row_el in enumerate(all_rows[:6]):
             txt = (row_el.inner_text() or "").lower()
             if "tender description" in txt or ("category" in txt and "closing" in txt):
-                data_start = i + 1
+                header_idx = i
+                logger.info(f"[ETENDERS] Header row at index {i}")
                 break
 
-        data_rows = all_rows[data_start:]
-        logger.info(f"[ETENDERS] Page {page_num}: {len(data_rows)} rows")
+        # Data starts after the header row (or after row 1 if no header found)
+        data_start  = header_idx + 1 if header_idx >= 0 else 2
+        data_rows   = all_rows[data_start:]
+        logger.info(f"[ETENDERS] Page {page_num}: {len(data_rows)} data rows (starting at {data_start})")
+
         if not data_rows:
+            logger.info("[ETENDERS] No data rows — done")
             break
 
         processed = 0
-        for row_el in data_rows[:ROWS_PER_PAGE]:
+        for row_el in data_rows:
             try:
-                row_soup = BeautifulSoup(f"<tr>{row_el.inner_html()}</tr>", "lxml")
+                row_html = row_el.inner_html()
+                row_soup = BeautifulSoup(f"<tr>{row_html}</tr>", "lxml")
                 cells    = row_soup.select("td")
 
                 def c(idx: int) -> str:
                     return clean_text(cells[idx].get_text()) if idx < len(cells) else ""
 
-                title           = c(col.get("description", 2))
-                category        = c(col.get("category", 1))
-                closing_raw     = c(col.get("closing", 5))
-                closing_fallback = _parse_date(closing_raw)
+                title        = c(col.get("description", 2))
+                category     = c(col.get("category", 1))
+                closing_raw  = c(col.get("closing", 5))
+                closing_fb   = _parse_date(closing_raw)
 
                 if not title or len(title) < 8:
                     continue
@@ -243,36 +269,41 @@ def _sync_scrape(_playwright) -> List[Dict]:
                 if title.lower() in seen:
                     continue
 
+                # Expand row to get detail panel
                 first_td = row_el.query_selector("td:first-child")
                 if first_td:
                     first_td.click()
                     page.wait_for_timeout(600)
 
-                updated = BeautifulSoup(page.content(), "lxml")
-                detail_html = ""
-                for el in updated.select("tr, div"):
+                # Parse detail panel
+                updated_soup = BeautifulSoup(page.content(), "lxml")
+                detail_html  = ""
+                for el in updated_soup.select("tr, div"):
                     if "organ of state" in el.get_text().lower():
                         detail_html = str(el)
                         break
 
                 detail = _parse_detail(detail_html) if detail_html else {}
-                tender = _build_tender(title, category, detail, closing_fallback)
+                tender = _build_tender(title, category, detail, closing_fb)
                 if tender:
                     seen.add(title.lower())
                     results.append(tender)
                     processed += 1
 
+                # Collapse row
                 if first_td:
                     try:
                         first_td.click()
                         page.wait_for_timeout(300)
                     except Exception:
                         pass
+
             except Exception as e:
                 logger.debug(f"[ETENDERS] Row error: {e}")
 
-        logger.info(f"[ETENDERS] Page {page_num}: {processed} tenders (total {len(results)})")
+        logger.info(f"[ETENDERS] Page {page_num}: {processed} extracted (total {len(results)})")
 
+        # Next page
         page.evaluate(_MODAL_JS)
         next_btn = (
             page.query_selector("#DataTables_Table_0_next:not(.disabled)")
@@ -281,6 +312,7 @@ def _sync_scrape(_playwright) -> List[Dict]:
             or page.query_selector("li.next:not(.disabled) a")
         )
         if not next_btn:
+            logger.info("[ETENDERS] No next page — done")
             break
         try:
             next_btn.click()
