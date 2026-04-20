@@ -8,10 +8,14 @@ import { findTown } from '../data/saLocations'
 import toast from 'react-hot-toast'
 
 const INDUSTRIES = [
-  'Security Services','Construction','Waste Management','Electrical Services',
-  'Plumbing','ICT / Technology','Maintenance','Mining Services',
-  'Cleaning Services','Catering','Consulting','Transport & Logistics','Healthcare','Landscaping',
+  "Accounting, Banking & Legal", "Building & Trades", "Civil",
+  "Cleaning & Facility Management", "Consultants", "Electrical & Automation",
+  "Engineering Consultants", "General, Property & Auctions", "HR & Training",
+  "IT & Telecoms", "Materials, Supply & Services", "Mechanical, Plant & Equipment",
+  "Media & Marketing", "Medical & Healthcare", "Security, Access, Alarms & Fire",
+  "Travel, Tourism & Hospitality",
 ]
+
 const PROVINCES = [
   'Gauteng','Western Cape','KwaZulu-Natal','Eastern Cape',
   'Free State','Limpopo','Mpumalanga','North West','Northern Cape',
