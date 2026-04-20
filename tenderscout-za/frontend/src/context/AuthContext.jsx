@@ -1,23 +1,40 @@
+// src/context/AuthContext.jsx
 import { createContext, useContext, useState, useEffect } from 'react'
 import { getProfile } from '../api/auth'
 
 const AuthContext = createContext(null)
 
+const DEFAULT_LAST_SEARCH = {
+  industries: [],
+  provinces: [],
+  municipalities: [],
+  towns: [],
+  keyword: '',
+  userLat: null,
+  userLng: null,
+  radiusKm: 100,
+  useMyLocation: false,
+}
+
+function loadLastSearch() {
+  try {
+    const saved = localStorage.getItem('lastSearch')
+    return saved ? { ...DEFAULT_LAST_SEARCH, ...JSON.parse(saved) } : DEFAULT_LAST_SEARCH
+  } catch {
+    return DEFAULT_LAST_SEARCH
+  }
+}
+
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(null)
+  const [user,    setUser]    = useState(null)
   const [loading, setLoading] = useState(true)
-  const [lastSearch, setLastSearch] = useState(() => {
-    try {
-      const saved = localStorage.getItem('lastSearch')
-      return saved ? JSON.parse(saved) : { industries: [], provinces: [], keyword: '' }
-    } catch { return { industries: [], provinces: [], keyword: '' } }
-  })
+  const [lastSearch, setLastSearch] = useState(loadLastSearch)
 
   useEffect(() => {
     const token = localStorage.getItem('token')
     if (token) {
       getProfile()
-        .then((res) => setUser(res.data))
+        .then(res => setUser(res.data))
         .catch(() => {
           localStorage.removeItem('token')
           localStorage.removeItem('user')
@@ -38,6 +55,7 @@ export function AuthProvider({ children }) {
     localStorage.removeItem('user')
     localStorage.removeItem('lastSearch')
     setUser(null)
+    setLastSearch(DEFAULT_LAST_SEARCH)
   }
 
   const refreshUser = async () => {
@@ -47,12 +65,17 @@ export function AuthProvider({ children }) {
   }
 
   const saveLastSearch = (filters) => {
-    setLastSearch(filters)
-    localStorage.setItem('lastSearch', JSON.stringify(filters))
+    const merged = { ...DEFAULT_LAST_SEARCH, ...filters }
+    setLastSearch(merged)
+    localStorage.setItem('lastSearch', JSON.stringify(merged))
   }
 
   return (
-    <AuthContext.Provider value={{ user, loading, loginUser, logoutUser, refreshUser, lastSearch, saveLastSearch }}>
+    <AuthContext.Provider value={{
+      user, loading,
+      loginUser, logoutUser, refreshUser,
+      lastSearch, saveLastSearch,
+    }}>
       {children}
     </AuthContext.Provider>
   )
