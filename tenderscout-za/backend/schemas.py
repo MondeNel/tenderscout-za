@@ -3,6 +3,7 @@ from typing import Optional, List
 from datetime import datetime
 
 
+# ── Auth ─────────────────────────────────────────────────────────────────────
 class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"
@@ -16,22 +17,39 @@ class UserLogin(BaseModel):
     email: EmailStr
     password: str
 
+
+# ── User ──────────────────────────────────────────────────────────────────────
 class UserOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
     email: str
     full_name: str
     credit_balance: float
-    industry_preferences: List[str] = []
-    province_preferences: List[str] = []
-    town_preferences: List[str] = []
+    industry_preferences:    List[str] = []
+    province_preferences:    List[str] = []
+    town_preferences:        List[str] = []
+    municipality_preferences:List[str] = []
+    # Location fields
+    business_location:  Optional[str]   = None
+    business_lat:       Optional[float] = None
+    business_lng:       Optional[float] = None
+    search_radius_km:   int             = 100
     created_at: datetime
 
-class UserPreferences(BaseModel):
-    industry_preferences: List[str] = []
-    province_preferences: List[str] = []
-    town_preferences: List[str] = []
 
+class UserPreferences(BaseModel):
+    industry_preferences:    List[str] = []
+    province_preferences:    List[str] = []
+    town_preferences:        List[str] = []
+    municipality_preferences:List[str] = []
+    # Location fields
+    business_location:  Optional[str]   = None
+    business_lat:       Optional[float] = None
+    business_lng:       Optional[float] = None
+    search_radius_km:   int             = 100
+
+
+# ── Credits ───────────────────────────────────────────────────────────────────
 class CreditBalance(BaseModel):
     balance: float
     rand_value: float
@@ -45,36 +63,46 @@ class TopUpResponse(BaseModel):
     new_balance: float
     message: str
 
+
+# ── Tenders ───────────────────────────────────────────────────────────────────
 class TenderOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
     title: str
-    description: Optional[str] = None
-    issuing_body: Optional[str] = None
-    province: Optional[str] = None
-    municipality: Optional[str] = None
-    town: Optional[str] = None
-    industry_category: Optional[str] = None
-    closing_date: Optional[str] = None
-    posted_date: Optional[str] = None
+    description:       Optional[str]   = None
+    issuing_body:      Optional[str]   = None
+    province:          Optional[str]   = None
+    municipality:      Optional[str]   = None
+    town:              Optional[str]   = None
+    lat:               Optional[float] = None
+    lng:               Optional[float] = None
+    industry_category: Optional[str]   = None
+    closing_date:      Optional[str]   = None
+    posted_date:       Optional[str]   = None
     source_url: str
-    source_site: Optional[str] = None
-    reference_number: Optional[str] = None
-    document_url: Optional[str] = None
+    source_site:       Optional[str]   = None
+    reference_number:  Optional[str]   = None
+    document_url:      Optional[str]   = None
     scraped_at: datetime
 
 class TenderLatestResponse(BaseModel):
     new_count: int
     tenders: List[TenderOut]
 
+
+# ── Search ────────────────────────────────────────────────────────────────────
 class SearchRequest(BaseModel):
-    industries: List[str] = []
-    provinces: List[str] = []
-    municipalities: List[str] = []
-    towns: List[str] = []
-    keyword: Optional[str] = None
-    page: int = 1
-    page_size: int = 20
+    industries:    List[str]     = []
+    provinces:     List[str]     = []
+    municipalities:List[str]     = []
+    towns:         List[str]     = []
+    keyword:       Optional[str] = None
+    # Location-aware search (NEW)
+    user_lat:      Optional[float] = None
+    user_lng:      Optional[float] = None
+    radius_km:     Optional[int]   = None
+    page:          int = 1
+    page_size:     int = 20
 
 class SearchResponse(BaseModel):
     total: int
@@ -83,6 +111,8 @@ class SearchResponse(BaseModel):
     results: List[TenderOut]
     credits_charged: float
 
+
+# ── Transactions ──────────────────────────────────────────────────────────────
 class TransactionOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
