@@ -1,69 +1,178 @@
 """
 scraper/playwright_runner.py
 -----------------------------
-Windows-compatible Playwright runner.
+Async-native Playwright helpers.
 
-On Windows, asyncio uses ProactorEventLoop which does NOT support
-subprocess creation (needed by Playwright). The fix is to run Playwright
-in a separate thread with its OWN event loop using SelectorEventLoop.
+COMPATIBILITY: run_sync() is provided as an async shim so existing callers
+(`await run_sync(fn)`) continue to import without error.
 
-Usage:
-    from scraper.playwright_runner import run_sync
-
-    def my_scraper(playwright):
-        browser = playwright.chromium.launch(headless=True)
-        ...
-        return results
-
-    results = await run_sync(my_scraper)
+Root cause of the original Windows NotImplementedError:
+  sync_playwright() inside ThreadPoolExecutor → ProactorEventLoop
+  cannot spawn subprocesses from threads.
+Fix: async_playwright() runs in the same event loop — no threads needed.
 """
-
 import asyncio
+import logging
 import sys
-import threading
 from typing import Callable, Any
 
+logger = logging.getLogger(__name__)
 
-def _run_in_thread(fn: Callable) -> Any:
-    """
-    Run fn(playwright) in a new thread with its own SelectorEventLoop.
-    This bypasses Windows ProactorEventLoop subprocess limitation.
-    """
-    result = None
-    error  = None
+if sys.platform == "win32":
+    try:
+        policy = asyncio.get_event_loop_policy()
+        if not isinstance(policy, asyncio.WindowsSelectorEventLoopPolicy):
+            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+            logger.info("[PLAYWRIGHT_RUNNER] Set WindowsSelectorEventLoopPolicy")
+    except AttributeError:
+        pass
 
-    def thread_target():
-        nonlocal result, error
-        # Force SelectorEventLoop on Windows
-        if sys.platform == "win32":
-            loop = asyncio.SelectorEventLoop()
-            asyncio.set_event_loop(loop)
-        else:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
 
-        try:
-            from playwright.sync_api import sync_playwright
-            with sync_playwright() as pw:
-                result = fn(pw)
-        except Exception as e:
-            error = e
-        finally:
-            loop.close()
-
-    t = threading.Thread(target=thread_target, daemon=True)
-    t.start()
-    t.join(timeout=300)  # 5 min max per scraper
-
-    if error:
-        raise error
-    return result
-
+# ---------------------------------------------------------------------------
+# Compatibility shim
+# ---------------------------------------------------------------------------
 
 async def run_sync(fn: Callable) -> Any:
     """
-    Async wrapper — runs a sync Playwright function in a thread pool.
-    Call from async code: results = await run_sync(my_fn)
+    Legacy shim. Old scrapers called: return await run_sync(_sync_fn)
+    where _sync_fn took a sync playwright object.
+
+    We now call fn as an async coroutine if possible. Scrapers that still
+    use the sync playwright API inside _sync_fn must be rewritten — see
+    etenders.py for the async rewrite pattern.
     """
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, _run_in_thread, fn)
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError:
+        logger.error("[PLAYWRIGHT] Not installed. Run: pip install playwright && playwright install chromium")
+        return []
+
+    try:
+        async with async_playwright() as pw:
+            if asyncio.iscoroutinefunction(fn):
+                return await fn(pw)
+            # Sync function: cannot safely run on Windows — log and return empty
+            logger.error(
+                "[PLAYWRIGHT] run_sync received a non-async function. "
+                "Please rewrite it as 'async def _scrape(pw):' using async_playwright API."
+            )
+            return []
+    except Exception as e:
+        logger.error(f"[PLAYWRIGHT] run_sync failed: {e}")
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Primary async API
+# ---------------------------------------------------------------------------
+
+async def get_page_content(
+    url: str,
+    wait_for: str = "networkidle",
+    timeout: int = 30000,
+    js_eval: str = "",
+) -> str:
+    """Navigate to url, return rendered HTML. Returns '' on failure."""
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError:
+        logger.error("[PLAYWRIGHT] Not installed")
+        return ""
+    try:
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(
+                headless=True,
+                args=["--ignore-certificate-errors", "--no-sandbox", "--disable-dev-shm-usage"],
+            )
+            ctx = await browser.new_context(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                ),
+                ignore_https_errors=True,
+            )
+            page = await ctx.new_page()
+            await page.goto(url, wait_until=wait_for, timeout=timeout)
+            if js_eval:
+                await page.evaluate(js_eval)
+            content = await page.content()
+            await browser.close()
+            return content
+    except Exception as e:
+        logger.error(f"[PLAYWRIGHT] get_page_content failed [{url}]: {e}")
+        return ""
+
+
+async def get_multiple_pages(urls: list, wait_for: str = "networkidle", timeout: int = 30000) -> dict:
+    """Load multiple URLs concurrently. Returns {url: html}."""
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError:
+        return {u: "" for u in urls}
+    results = {}
+    try:
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(
+                headless=True,
+                args=["--ignore-certificate-errors", "--no-sandbox", "--disable-dev-shm-usage"],
+            )
+            ctx = await browser.new_context(ignore_https_errors=True)
+
+            async def _load(url):
+                try:
+                    pg = await ctx.new_page()
+                    await pg.goto(url, wait_until=wait_for, timeout=timeout)
+                    html = await pg.content()
+                    await pg.close()
+                    return url, html
+                except Exception as e:
+                    logger.warning(f"[PLAYWRIGHT] {url}: {e}")
+                    return url, ""
+
+            pairs = await asyncio.gather(*[_load(u) for u in urls])
+            await browser.close()
+            results = dict(pairs)
+    except Exception as e:
+        logger.error(f"[PLAYWRIGHT] get_multiple_pages failed: {e}")
+        results = {u: "" for u in urls}
+    return results
+
+
+async def interact_and_scrape(url: str, actions: list, timeout: int = 90000) -> str:
+    """
+    Load a page, run interaction steps, return final HTML.
+    actions: list of dicts with keys: type, ms, js, selector, value
+    """
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError:
+        return ""
+    try:
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(
+                headless=True,
+                args=["--ignore-certificate-errors", "--no-sandbox", "--disable-dev-shm-usage"],
+            )
+            ctx = await browser.new_context(ignore_https_errors=True,
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                ))
+            page = await ctx.new_page()
+            await page.goto(url, wait_until="networkidle", timeout=timeout)
+            for act in actions:
+                try:
+                    t = act.get("type")
+                    if t == "wait":       await page.wait_for_timeout(act.get("ms", 1000))
+                    elif t == "eval":     await page.evaluate(act["js"])
+                    elif t == "select":   await page.select_option(act["selector"], value=act["value"])
+                    elif t == "click":    await page.click(act["selector"])
+                    elif t == "waitnet":  await page.wait_for_load_state("networkidle", timeout=15000)
+                except Exception as e:
+                    logger.debug(f"[PLAYWRIGHT] action {act.get('type')} failed: {e}")
+            content = await page.content()
+            await browser.close()
+            return content
+    except Exception as e:
+        logger.error(f"[PLAYWRIGHT] interact_and_scrape failed: {e}")
+        return ""
