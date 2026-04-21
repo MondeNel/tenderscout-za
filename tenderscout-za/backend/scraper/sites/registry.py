@@ -1,40 +1,53 @@
 """
 scraper/sites/registry.py
---------------------------
+==========================
 SINGLE SOURCE OF TRUTH for all tender sources.
-Last verified: 2026-04-18 via test_sites.py + manual URL checks
+Last verified: 2026-04-21 via test_all_scrapers.py
+
+This file centralizes ALL website configurations. The orchestrator reads from
+this registry to know what to scrape. Individual scraper files (city_portals.py,
+js_scraper.py, etc.) may contain their own configs for backward compatibility,
+but this registry should be considered authoritative.
+
+CATEGORIES:
+    ACTIVE_SOURCES  — Confirmed working, scraped daily
+    BROKEN_SOURCES  — Need fixing (moved from ACTIVE when they break)
+    DEAD_SOURCES    — DNS failure, site removed, or no working URL (never delete)
+
+SCRAPE TYPES (mapped to handler functions in dispatcher):
+    links               Generic anchor-tag scraper
+    standard            Generic with parent-element context
+    phoca               Joomla Phoca Download component
+    phokwane            WordPress category/post page
+    dikgatlong          Title + PDF link with closing date in heading
+    ga_segonyana        Simple HTML table: Tender Advert | Closing Date
+    gamagara            Structured text block parser
+    zfm_district        Document directory listing (PDF filenames)
+    namakwa_district    Grouped-by-month link list
+    kareeberg           Static .htm page with RFQ links
+    siyancuma           PDF-link scraper (Siyancuma-specific)
+    frances_baard       Card layout with download buttons
+    js_playwright       JS-rendered site — Playwright required (js_scraper.py)
+    etenders_playwright eTenders-specific Playwright scraper (etenders.py)
 
 To add a site:    add to ACTIVE_SOURCES
 To fix a site:    move from BROKEN_SOURCES → ACTIVE_SOURCES, update url/scrape_type
 To retire a site: move to DEAD_SOURCES (keeps history, never delete)
-
-scrape_type values:
-  links                  Generic anchor-tag scraper
-  phoca                  Joomla Phoca Download component
-  standard               Generic with parent-element context
-  siyancuma              PDF-link scraper (Siyancuma-specific)
-  hantam                 Follows "View All" sub-page link
-  gamagara               Structured text block parser
-  dikgatlong             Title + PDF link with closing date in heading
-  phokwane               WordPress category/post page
-  ga_segonyana           Simple HTML table: Tender Advert | Closing Date
-  dawid_kruiper          Tab-based table (Open Bids / Closed Bids)
-  zfm_district           Document directory listing (PDF filenames)
-  namakwa_district       Grouped-by-month link list
-  kareeberg              Static .htm page with RFQ links
-  js_playwright          JS-rendered site — Playwright required
-  etenders_playwright    eTenders-specific Playwright scraper
 """
 
 from typing import List, Dict
 
-# ---------------------------------------------------------------------------
-# ✅ ACTIVE — confirmed returning tenders (verified 2026-04-18)
-# ---------------------------------------------------------------------------
+# =============================================================================
+# ✅ ACTIVE SOURCES — Confirmed returning tenders
+# =============================================================================
+# These are scraped daily. Last verification: 2026-04-21 via test_all_scrapers.py
+# =============================================================================
 
 ACTIVE_SOURCES: List[Dict] = [
 
-    # ── Gauteng ───────────────────────────────────────────────────────────────
+    # =========================================================================
+    # GAUTENG — Major Metropolitan Municipalities
+    # =========================================================================
     {
         "name":                     "City of Tshwane",
         "url":                      "https://www.tshwane.gov.za/?page_id=2194",
@@ -42,7 +55,7 @@ ACTIVE_SOURCES: List[Dict] = [
         "town":                     "Pretoria",
         "scrape_type":              "links",
         "allow_province_detection": False,
-        "notes":                    "~11 tenders",
+        "notes":                    "~11 tenders — confirmed active",
     },
     {
         "name":                     "City of Ekurhuleni",
@@ -51,7 +64,7 @@ ACTIVE_SOURCES: List[Dict] = [
         "town":                     "Ekurhuleni",
         "scrape_type":              "links",
         "allow_province_detection": False,
-        "notes":                    "~65 tenders",
+        "notes":                    "~46 tenders — confirmed active",
     },
     {
         "name":                     "City of Johannesburg",
@@ -60,10 +73,12 @@ ACTIVE_SOURCES: List[Dict] = [
         "town":                     "Johannesburg",
         "scrape_type":              "links",
         "allow_province_detection": False,
-        "notes":                    "SharePoint-based tender list",
+        "notes":                    "SharePoint-based tender list — may need Playwright",
     },
 
-    # ── KwaZulu-Natal ─────────────────────────────────────────────────────────
+    # =========================================================================
+    # KWAZULU-NATAL
+    # =========================================================================
     {
         "name":                     "eThekwini Municipality",
         "url":                      "https://www.durban.gov.za/pages/government/procurement",
@@ -74,7 +89,9 @@ ACTIVE_SOURCES: List[Dict] = [
         "notes":                    "Procurement page — confirmed live",
     },
 
-    # ── Western Cape ──────────────────────────────────────────────────────────
+    # =========================================================================
+    # WESTERN CAPE
+    # =========================================================================
     {
         "name":                     "City of Cape Town",
         "url":                      "https://web1.capetown.gov.za/web1/procurementportal/",
@@ -82,10 +99,12 @@ ACTIVE_SOURCES: List[Dict] = [
         "town":                     "Cape Town",
         "scrape_type":              "links",
         "allow_province_detection": False,
-        "notes":                    "~9 tenders",
+        "notes":                    "~4 tenders — confirmed active",
     },
 
-    # ── Eastern Cape ──────────────────────────────────────────────────────────
+    # =========================================================================
+    # EASTERN CAPE — Metropolitan & District
+    # =========================================================================
     {
         "name":                     "Buffalo City Metro",
         "url":                      "https://www.buffalocity.gov.za/tenders",
@@ -93,7 +112,7 @@ ACTIVE_SOURCES: List[Dict] = [
         "town":                     "East London",
         "scrape_type":              "links",
         "allow_province_detection": False,
-        "notes":                    "~7 tenders",
+        "notes":                    "~5 tenders — confirmed active",
     },
     {
         "name":                     "Nelson Mandela Bay",
@@ -102,24 +121,19 @@ ACTIVE_SOURCES: List[Dict] = [
         "town":                     "Gqeberha",
         "scrape_type":              "links",
         "allow_province_detection": False,
-        "notes":                    "~6 tenders",
+        "notes":                    "~6 tenders — confirmed active",
     },
 
-
-    # ── Eastern Cape — Additional Municipalities ──────────────────────────────
+    # =========================================================================
+    # EASTERN CAPE — Additional Local Municipalities
+    # =========================================================================
+    # (Keeping all your Eastern Cape sources — they're working and provide good coverage)
     {
         "name":                     "Matatiele Local Municipality",
         "url":                      "https://www.matatiele.gov.za/tenders/",
         "province":                 "Eastern Cape", "town": "Matatiele",
         "scrape_type":              "links", "allow_province_detection": False,
         "notes":                    "Added 2026-04-19",
-    },
-    {
-        "name":                     "Buffalo City Metro (Tenders)",
-        "url":                      "https://www.buffalocity.gov.za/tender_openings.php",
-        "province":                 "Eastern Cape", "town": "East London",
-        "scrape_type":              "links", "allow_province_detection": False,
-        "notes":                    "Tender openings page",
     },
     {
         "name":                     "Ntabankulu Local Municipality",
@@ -324,7 +338,10 @@ ACTIVE_SOURCES: List[Dict] = [
         "scrape_type":              "links", "allow_province_detection": False,
         "notes":                    "Added 2026-04-19",
     },
-    # ── Free State ────────────────────────────────────────────────────────────
+
+    # =========================================================================
+    # FREE STATE
+    # =========================================================================
     {
         "name":                     "Mangaung Municipality",
         "url":                      "https://www.mangaung.co.za/category/tenders-bids/",
@@ -335,7 +352,9 @@ ACTIVE_SOURCES: List[Dict] = [
         "notes":                    "WordPress category page — URL fixed 2026-04-18",
     },
 
-    # ── Northern Cape — Provincial ────────────────────────────────────────────
+    # =========================================================================
+    # NORTHERN CAPE — Provincial Government
+    # =========================================================================
     {
         "name":                     "Northern Cape Provincial Government",
         "url":                      "https://www.ncgov.co.za/tenders",
@@ -343,7 +362,7 @@ ACTIVE_SOURCES: List[Dict] = [
         "town":                     "Kimberley",
         "scrape_type":              "standard",
         "allow_province_detection": False,
-        "notes":                    "~336 tenders — largest single HTML source",
+        "notes":                    "~334 tenders — largest single HTML source",
     },
     {
         "name":                     "Northern Cape DEDAT",
@@ -352,10 +371,12 @@ ACTIVE_SOURCES: List[Dict] = [
         "town":                     "Kimberley",
         "scrape_type":              "phoca",
         "allow_province_detection": False,
-        "notes":                    "~51 tenders — Joomla Phoca Download",
+        "notes":                    "Joomla Phoca Download",
     },
 
-    # ── Northern Cape — Frances Baard ─────────────────────────────────────────
+    # =========================================================================
+    # NORTHERN CAPE — Frances Baard District
+    # =========================================================================
     {
         "name":                     "Sol Plaatje Municipality",
         "url":                      "https://www.solplaatje.org.za/tenders",
@@ -363,7 +384,7 @@ ACTIVE_SOURCES: List[Dict] = [
         "town":                     "Kimberley",
         "scrape_type":              "links",
         "allow_province_detection": False,
-        "notes":                    "~6 tenders — site is slow (15s+), increase timeout if timing out",
+        "notes":                    "Site is slow (15s+) — increase timeout",
     },
     {
         "name":                     "Dikgatlong Municipality",
@@ -372,7 +393,7 @@ ACTIVE_SOURCES: List[Dict] = [
         "town":                     "Barkly West",
         "scrape_type":              "dikgatlong",
         "allow_province_detection": False,
-        "notes":                    "Title in heading + PDF link + closing date in heading. URL fixed.",
+        "notes":                    "~244 tenders — largest municipal source",
     },
     {
         "name":                     "Magareng Municipality",
@@ -381,7 +402,7 @@ ACTIVE_SOURCES: List[Dict] = [
         "town":                     "Warrenton",
         "scrape_type":              "dikgatlong",
         "allow_province_detection": False,
-        "notes":                    "Same structure as Dikgatlong. URL fixed.",
+        "notes":                    "Same structure as Dikgatlong",
     },
     {
         "name":                     "Phokwane Municipality",
@@ -390,7 +411,7 @@ ACTIVE_SOURCES: List[Dict] = [
         "town":                     "Hartswater",
         "scrape_type":              "phokwane",
         "allow_province_detection": False,
-        "notes":                    "WordPress category page. URL fixed.",
+        "notes":                    "WordPress category page",
     },
     {
         "name":                     "Frances Baard District",
@@ -399,10 +420,12 @@ ACTIVE_SOURCES: List[Dict] = [
         "town":                     "Kimberley",
         "scrape_type":              "frances_baard",
         "allow_province_detection": False,
-        "notes":                    "Card layout: title + closing date + download button. URL fixed.",
+        "notes":                    "Card layout: title + closing date + download button",
     },
 
-    # ── Northern Cape — ZF Mgcawu ─────────────────────────────────────────────
+    # =========================================================================
+    # NORTHERN CAPE — ZF Mgcawu District
+    # =========================================================================
     {
         "name":                     "Dawid Kruiper Municipality",
         "url":                      "https://web.dkm.gov.za/bids",
@@ -410,7 +433,7 @@ ACTIVE_SOURCES: List[Dict] = [
         "town":                     "Upington",
         "scrape_type":              "js_playwright",
         "allow_province_detection": False,
-        "notes":                    "JS-rendered tabbed table — Playwright required. URL fixed.",
+        "notes":                    "JS-rendered tabbed table — Playwright required",
     },
     {
         "name":                     "ZF Mgcawu District",
@@ -419,7 +442,7 @@ ACTIVE_SOURCES: List[Dict] = [
         "town":                     "Upington",
         "scrape_type":              "zfm_district",
         "allow_province_detection": False,
-        "notes":                    "Document directory — PDF filenames are tender titles. URL fixed.",
+        "notes":                    "Document directory — PDF filenames are tender titles",
     },
     {
         "name":                     "Kai !Garib Municipality",
@@ -431,7 +454,9 @@ ACTIVE_SOURCES: List[Dict] = [
         "notes":                    "URL fixed 2026-04-18",
     },
 
-    # ── Northern Cape — Namakwa ───────────────────────────────────────────────
+    # =========================================================================
+    # NORTHERN CAPE — Namakwa District
+    # =========================================================================
     {
         "name":                     "Richtersveld Municipality",
         "url":                      "https://www.richtersveld.gov.za/tenders/",
@@ -439,7 +464,7 @@ ACTIVE_SOURCES: List[Dict] = [
         "town":                     "Port Nolloth",
         "scrape_type":              "links",
         "allow_province_detection": False,
-        "notes":                    "~9 tenders — confirmed active",
+        "notes":                    "~7 tenders — confirmed active",
     },
     {
         "name":                     "Hantam Municipality",
@@ -448,7 +473,7 @@ ACTIVE_SOURCES: List[Dict] = [
         "town":                     "Calvinia",
         "scrape_type":              "phokwane",
         "allow_province_detection": False,
-        "notes":                    "~12 tenders — confirmed active",
+        "notes":                    "Confirmed active",
     },
     {
         "name":                     "Karoo Hoogland Municipality",
@@ -457,7 +482,7 @@ ACTIVE_SOURCES: List[Dict] = [
         "town":                     "Sutherland",
         "scrape_type":              "phoca",
         "allow_province_detection": False,
-        "notes":                    "~38 tenders",
+        "notes":                    "~4 tenders — confirmed active",
     },
     {
         "name":                     "Namakwa District",
@@ -466,7 +491,7 @@ ACTIVE_SOURCES: List[Dict] = [
         "town":                     "Springbok",
         "scrape_type":              "namakwa_district",
         "allow_province_detection": False,
-        "notes":                    "Grouped by month, plain link list. URL fixed.",
+        "notes":                    "Grouped by month, plain link list",
     },
     {
         "name":                     "Kamiesberg Municipality",
@@ -484,10 +509,12 @@ ACTIVE_SOURCES: List[Dict] = [
         "town":                     "Carnarvon",
         "scrape_type":              "kareeberg",
         "allow_province_detection": False,
-        "notes":                    "Static .htm page — RFQ links list. URL fixed.",
+        "notes":                    "Static .htm page — RFQ links list",
     },
 
-    # ── Northern Cape — Pixley ka Seme ────────────────────────────────────────
+    # =========================================================================
+    # NORTHERN CAPE — Pixley ka Seme District
+    # =========================================================================
     {
         "name":                     "Siyathemba Municipality",
         "url":                      "https://www.siyathemba.gov.za/index.php/tenders-quotations/tenders",
@@ -495,7 +522,7 @@ ACTIVE_SOURCES: List[Dict] = [
         "town":                     "Prieska",
         "scrape_type":              "phoca",
         "allow_province_detection": False,
-        "notes":                    "~13 tenders",
+        "notes":                    "~14 tenders — confirmed active",
     },
     {
         "name":                     "Siyathemba Municipality (Quotes)",
@@ -504,7 +531,7 @@ ACTIVE_SOURCES: List[Dict] = [
         "town":                     "Prieska",
         "scrape_type":              "phoca",
         "allow_province_detection": False,
-        "notes":                    "~13 quotations",
+        "notes":                    "Quotations page",
     },
     {
         "name":                     "Siyancuma Municipality",
@@ -513,7 +540,7 @@ ACTIVE_SOURCES: List[Dict] = [
         "town":                     "Douglas",
         "scrape_type":              "siyancuma",
         "allow_province_detection": False,
-        "notes":                    "~46 tenders — PDF link scraper",
+        "notes":                    "~36 tenders — PDF link scraper",
     },
     {
         "name":                     "Ubuntu Municipality",
@@ -522,7 +549,7 @@ ACTIVE_SOURCES: List[Dict] = [
         "town":                     "Victoria West",
         "scrape_type":              "links",
         "allow_province_detection": False,
-        "notes":                    "Note: typo in URL ('temders') is intentional — that's their actual URL",
+        "notes":                    "Note: typo in URL ('temders') is intentional",
     },
     {
         "name":                     "Pixley ka Seme District",
@@ -534,7 +561,9 @@ ACTIVE_SOURCES: List[Dict] = [
         "notes":                    "URL fixed 2026-04-18",
     },
 
-    # ── Northern Cape — John Taolo Gaetsewe ───────────────────────────────────
+    # =========================================================================
+    # NORTHERN CAPE — John Taolo Gaetsewe District
+    # =========================================================================
     {
         "name":                     "Gamagara Municipality",
         "url":                      "https://www.gamagara.gov.za/tenders",
@@ -542,7 +571,7 @@ ACTIVE_SOURCES: List[Dict] = [
         "town":                     "Kathu",
         "scrape_type":              "gamagara",
         "allow_province_detection": False,
-        "notes":                    "~6 tenders — structured text parser",
+        "notes":                    "~1 tender — structured text parser",
     },
     {
         "name":                     "Ga-Segonyana Municipality",
@@ -551,7 +580,7 @@ ACTIVE_SOURCES: List[Dict] = [
         "town":                     "Kuruman",
         "scrape_type":              "ga_segonyana",
         "allow_province_detection": False,
-        "notes":                    "Simple HTML table: Tender Advert | Closing Date. URL fixed.",
+        "notes":                    "Simple HTML table: Tender Advert | Closing Date",
     },
     {
         "name":                     "Joe Morolong Municipality",
@@ -571,7 +600,6 @@ ACTIVE_SOURCES: List[Dict] = [
         "allow_province_detection": False,
         "notes":                    "URL fixed 2026-04-18",
     },
-
     {
         "name":                     "Umsobomvu Municipality",
         "url":                      "https://www.umsobomvumun.co.za/index.php?option=com_docman&task=cat_view&gid=98&Itemid=53",
@@ -579,7 +607,7 @@ ACTIVE_SOURCES: List[Dict] = [
         "town":                     "Colesberg",
         "scrape_type":              "phoca",
         "allow_province_detection": False,
-        "notes":                    "~7 tenders — confirmed active 2026-04-18",
+        "notes":                    "~7 tenders — confirmed active",
     },
     {
         "name":                     "Emthanjeni Municipality",
@@ -588,10 +616,15 @@ ACTIVE_SOURCES: List[Dict] = [
         "town":                     "De Aar",
         "scrape_type":              "phoca",
         "allow_province_detection": False,
-        "notes":                    "~3 tenders — confirmed active 2026-04-18",
+        "notes":                    "~4 tenders — confirmed active",
     },
 
-        # ── Aggregators ───────────────────────────────────────────────────────────
+    # =========================================================================
+    # AGGREGATORS — Nationwide Coverage
+    # =========================================================================
+    # These are your MOST IMPORTANT sources for nationwide tender coverage.
+    # They aggregate tenders from multiple government sources.
+    # =========================================================================
     {
         "name":                     "Municipalities.co.za (Northern Cape)",
         "url":                      "https://municipalities.co.za/tenders/index/7/northern-cape",
@@ -599,7 +632,7 @@ ACTIVE_SOURCES: List[Dict] = [
         "town":                     None,
         "scrape_type":              "standard",
         "allow_province_detection": True,
-        "notes":                    "~69 tenders — multi-municipality aggregator",
+        "notes":                    "~55 tenders — multi-municipality aggregator",
     },
     {
         "name":                     "EasyTenders",
@@ -608,7 +641,7 @@ ACTIVE_SOURCES: List[Dict] = [
         "town":                     None,
         "scrape_type":              "js_playwright",
         "allow_province_detection": True,
-        "notes":                    "ALL provinces — scrapes all 9 province pages. Playwright required.",
+        "notes":                    "⭐ ALL 9 provinces — scrapes each province page. ~52+ tenders per province.",
     },
     {
         "name":                     "eTenders Portal (National)",
@@ -617,23 +650,93 @@ ACTIVE_SOURCES: List[Dict] = [
         "town":                     None,
         "scrape_type":              "etenders_playwright",
         "allow_province_detection": True,
-        "notes":                    "National portal — province from detail panel. Playwright required.",
+        "notes":                    "⭐ Official government portal — nationwide tenders. Province from detail panel.",
     },
     {
         "name":                     "sa-tenders.co.za",
-        "url":                      "https://sa-tenders.co.za/tenders/",
+        "url":                      "https://sa-tenders.co.za/tenders",
         "province":                 None,
         "town":                     None,
         "scrape_type":              "js_playwright",
         "allow_province_detection": True,
-        "notes":                    "Multi-province aggregator — Playwright required",
+        "notes":                    "Multi-province aggregator — Playwright required. Currently returns 0 results — needs debugging.",
     },
+    # Add these entries to ACTIVE_SOURCES in registry.py
+
+    # =========================================================================
+    # ADDITIONAL AGGREGATORS (from sa_tenders.py)
+    # =========================================================================
+    {
+        "name":                     "OnlineTenders (Northern Cape)",
+        "url":                      "https://www.onlinetenders.co.za/tenders/northern-cape",
+        "province":                 "Northern Cape",
+        "town":                     None,
+        "scrape_type":              "js_playwright",  # Try Playwright first
+        "allow_province_detection": True,
+        "notes":                    "Currently returns 0 — needs selector debugging",
+    },
+    {
+        "name":                     "TenderAlerts",
+        "url":                      "https://tenderalerts.co.za",
+        "province":                 None,
+        "town":                     None,
+        "scrape_type":              "standard",
+        "allow_province_detection": True,
+        "notes":                    "Currently returns 0 — needs selector debugging",
+    },
+    
+    # =========================================================================
+    # TENDER BULLETINS (from tender_bulletins.py)
+    # =========================================================================
+    {
+        "name":                     "tenderbulletins.co.za",
+        "url":                      "https://tenderbulletins.co.za",
+        "province":                 None,
+        "town":                     None,
+        "scrape_type":              "js_playwright",  # 403 with httpx — use Playwright
+        "allow_province_detection": True,
+        "notes":                    "Returns 403 with httpx — needs Playwright",
+    },
+    
+    # -------------------------------------------------------------------------
+    # TODO: Add these sources once debugged
+    # -------------------------------------------------------------------------
+    # {
+    #     "name":                     "OnlineTenders (Northern Cape)",
+    #     "url":                      "https://www.onlinetenders.co.za/tenders/northern-cape",
+    #     "province":                 "Northern Cape",
+    #     "town":                     None,
+    #     "scrape_type":              "js_playwright",
+    #     "allow_province_detection": True,
+    #     "notes":                    "Currently returns 0 results — needs selector updates",
+    # },
+    # {
+    #     "name":                     "TenderAlerts",
+    #     "url":                      "https://tenderalerts.co.za",
+    #     "province":                 None,
+    #     "town":                     None,
+    #     "scrape_type":              "standard",
+    #     "allow_province_detection": True,
+    #     "notes":                    "Currently returns 0 results — needs selector updates",
+    # },
+    # {
+    #     "name":                     "tenderbulletins.co.za",
+    #     "url":                      "https://tenderbulletins.co.za",
+    #     "province":                 None,
+    #     "town":                     None,
+    #     "scrape_type":              "js_playwright",  # 403 Forbidden with httpx
+    #     "allow_province_detection": True,
+    #     "notes":                    "Returns 403 — needs Playwright or better headers",
+    # },
 ]
 
 
-# ---------------------------------------------------------------------------
-# ⚠️  BROKEN — still need fixing
-# ---------------------------------------------------------------------------
+# =============================================================================
+# ⚠️ BROKEN SOURCES — Need fixing
+# =============================================================================
+# These were in ACTIVE but are currently not returning data.
+# Fix and move back to ACTIVE_SOURCES.
+# =============================================================================
 
 BROKEN_SOURCES: List[Dict] = [
     {
@@ -643,13 +746,14 @@ BROKEN_SOURCES: List[Dict] = [
         "scrape_type": "phoca", "allow_province_detection": False,
         "notes": "HTTP 404 — correct URL not yet found",
     },
-
 ]
 
 
-# ---------------------------------------------------------------------------
-# ❌ DEAD — DNS failure, no working URL found (verified 2026-04-18)
-# ---------------------------------------------------------------------------
+# =============================================================================
+# ❌ DEAD SOURCES — DNS failure, site removed, or no working URL
+# =============================================================================
+# Never delete — keep for historical reference to avoid re-adding broken URLs.
+# =============================================================================
 
 DEAD_SOURCES: List[Dict] = [
     {"name": "//Khara Hais Municipality",    "url": "https://www.kharahais.gov.za/tenders",              "province": "Northern Cape", "town": "Upington",     "notes": "Timeout — no alternative found"},
@@ -658,33 +762,90 @@ DEAD_SOURCES: List[Dict] = [
     {"name": "Nama Khoi Municipality",       "url": "https://www.namakhoi.gov.za/tenders",              "province": "Northern Cape", "town": "Springbok",    "notes": "HTTP 404 — no working URL found"},
     {"name": "Renosterberg Municipality",    "url": "https://www.renosterberg.gov.za/tenders",          "province": "Northern Cape", "town": "Petrusville",  "notes": "DNS failure — no alternative found"},
     {"name": "Thembelihle Municipality",     "url": "https://www.thembelihle.gov.za/tenders",           "province": "Northern Cape", "town": "Hopetown",     "notes": "DNS failure — no alternative found"},
+    {"name": "tendersbulletins.co.za (Northern Cape)", "url": "https://tendersbulletins.co.za/location/northern-cape", "province": "Northern Cape", "town": None, "notes": "DNS failure — domain may be defunct"},
 ]
 
 
-# ---------------------------------------------------------------------------
-# Combined views
-# ---------------------------------------------------------------------------
+# =============================================================================
+# COMBINED VIEWS
+# =============================================================================
 
 ALL_ACTIVE_SOURCES: List[Dict] = ACTIVE_SOURCES
 ALL_SOURCES:        List[Dict] = ACTIVE_SOURCES + BROKEN_SOURCES + DEAD_SOURCES
 
 
+# =============================================================================
+# FILTER FUNCTIONS
+# =============================================================================
+
 def get_by_scrape_type(scrape_type: str) -> List[Dict]:
+    """
+    Get all active sources with a specific scrape_type.
+    
+    Args:
+        scrape_type: e.g., "links", "js_playwright", "etenders_playwright"
+        
+    Returns:
+        List of source configurations
+    """
     return [s for s in ACTIVE_SOURCES if s.get("scrape_type") == scrape_type]
 
 
 def get_playwright_sources() -> List[Dict]:
+    """
+    Get all sources that require Playwright (JavaScript rendering).
+    
+    Returns:
+        List of sources with scrape_type "js_playwright" or "etenders_playwright"
+    """
     return [s for s in ACTIVE_SOURCES if s.get("scrape_type") in ("js_playwright", "etenders_playwright")]
 
 
 def get_html_sources() -> List[Dict]:
+    """
+    Get all sources that can be scraped with httpx + BeautifulSoup.
+    
+    Returns:
+        List of sources NOT requiring Playwright
+    """
     return [s for s in ACTIVE_SOURCES if s.get("scrape_type") not in ("js_playwright", "etenders_playwright")]
 
 
+def get_sources_by_province(province: str) -> List[Dict]:
+    """
+    Get all active sources for a specific province.
+    
+    Args:
+        province: e.g., "Gauteng", "Western Cape", "Northern Cape"
+        
+    Returns:
+        List of source configurations for that province
+    """
+    return [s for s in ACTIVE_SOURCES if s.get("province") == province]
+
+
+def get_aggregator_sources() -> List[Dict]:
+    """
+    Get all aggregator sources (nationwide coverage).
+    
+    Returns:
+        List of sources where province is None (meaning multi-province)
+    """
+    return [s for s in ACTIVE_SOURCES if s.get("province") is None]
+
+
 def summary() -> Dict:
+    """
+    Get summary statistics about the source registry.
+    
+    Returns:
+        Dictionary with counts: active, broken, dead, total
+    """
     return {
         "active":  len(ACTIVE_SOURCES),
         "broken":  len(BROKEN_SOURCES),
         "dead":    len(DEAD_SOURCES),
         "total":   len(ALL_SOURCES),
+        "playwright": len(get_playwright_sources()),
+        "html": len(get_html_sources()),
     }
