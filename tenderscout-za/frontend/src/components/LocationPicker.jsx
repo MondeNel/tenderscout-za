@@ -1,11 +1,46 @@
+/**
+ * File: src/components/LocationPicker.jsx
+ * Purpose: Interactive Location Selection Component with Map
+ * 
+ * This component provides a complete location selection experience:
+ *   - Search for towns, cities, or districts
+ *   - Dropdown suggestions with province/district context
+ *   - Province and district filter selectors
+ *   - Interactive Leaflet map with click-to-select
+ *   - Radius slider for location-based search
+ *   - Preview of municipalities within selected radius
+ * 
+ * The component integrates with saLocations.js for geographic data
+ * and provides a seamless way for users to set their business location
+ * or filter tenders by geographic area.
+ * 
+ * Usage:
+ *   <LocationPicker
+ *     value={{ location: {...}, radiusKm: 100 }}
+ *     onChange={({ location, radiusKm }) => handleChange(...)}
+ *     showRadius={true}
+ *     showPreview={true}
+ *   />
+ */
+
 import { useState, useEffect, useMemo } from 'react'
 import { MapContainer, TileLayer, Marker, Popup, Circle, useMapEvents } from 'react-leaflet'
 import L from 'leaflet'
 import { MapPin, Search, X, Navigation } from 'lucide-react'
-import { SA_LOCATIONS, getTowns, getMunicipalities, findTown, getMunicipalitiesWithinRadius } from '../data/saLocations'
+import { 
+  SA_LOCATIONS, 
+  getTowns, 
+  getMunicipalities, 
+  findTown, 
+  getMunicipalitiesWithinRadius 
+} from '../data/saLocations'
 import 'leaflet/dist/leaflet.css'
 
-// Fix Leaflet default marker icon
+// =============================================================================
+// LEAFLET ICON CONFIGURATION
+// =============================================================================
+// Fix Leaflet's default marker icons which don't load correctly in bundled apps.
+
 delete L.Icon.Default.prototype._getIconUrl
 L.Icon.Default.mergeOptions({
   iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png',
@@ -13,15 +48,45 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
 })
 
+// =============================================================================
+// CONSTANTS
+// =============================================================================
+
+// Available radius options for quick selection
 const RADIUS_OPTIONS = [25, 50, 100, 150, 200, 300, 500]
 
+// =============================================================================
+// HELPER COMPONENT: MapClickHandler
+// =============================================================================
+
+/**
+ * Handles map click events and forwards the clicked coordinates
+ * Uses Leaflet's useMapEvents hook internally.
+ * 
+ * @param {Function} onMapClick - Callback receiving { lat, lng } of click
+ */
 function MapClickHandler({ onMapClick }) {
-  useMapEvents({ click: (e) => onMapClick(e.latlng) })
+  useMapEvents({ 
+    click: (e) => onMapClick(e.latlng) 
+  })
   return null
 }
 
+// =============================================================================
+// HELPER COMPONENT: TownMarkers
+// =============================================================================
+
+/**
+ * Renders markers for all towns in the selected province/district
+ * 
+ * @param {string} province - Selected province
+ * @param {string} district - Selected district (optional)
+ * @param {Function} onSelect - Callback when a town is selected
+ * @param {Object} selected - Currently selected location
+ */
 function TownMarkers({ province, district, onSelect, selected }) {
   const towns = getTowns(province, district)
+  
   return towns.map(town => (
     <Marker
       key={town.name}
@@ -41,36 +106,108 @@ function TownMarkers({ province, district, onSelect, selected }) {
   ))
 }
 
-export default function LocationPicker({ value, onChange, showRadius = true, showPreview = true, compact = false }) {
+// =============================================================================
+// MAIN COMPONENT: LocationPicker
+// =============================================================================
+
+/**
+ * LocationPicker - Complete location selection with map and radius
+ * 
+ * @param {Object} props
+ * @param {Object} props.value - { location: {...}, radiusKm: number }
+ * @param {Function} props.onChange - Callback when location or radius changes
+ * @param {boolean} props.showRadius - Whether to show radius controls
+ * @param {boolean} props.showPreview - Whether to show municipality preview
+ * @param {boolean} props.compact - Use compact layout (smaller map)
+ */
+export default function LocationPicker({ 
+  value, 
+  onChange, 
+  showRadius = true, 
+  showPreview = true, 
+  compact = false 
+}) {
+  // ===========================================================================
+  // DESTRUCTURE VALUE
+  // ===========================================================================
+  
   const { location, radiusKm } = value
 
-  const [query,         setQuery]         = useState(location?.name || '')
-  const [suggestions,   setSuggestions]   = useState([])
-  const [selProvince,   setSelProvince]   = useState(location?.province || '')
-  const [selDistrict,   setSelDistrict]   = useState(location?.district || '')
-  const [mapCenter,     setMapCenter]     = useState(
-    location ? [location.lat, location.lng] : [-28.4541, 24.7499]
+  // ===========================================================================
+  // STATE
+  // ===========================================================================
+  
+  // Search input value
+  const [query, setQuery] = useState(location?.name || '')
+  
+  // Search suggestions dropdown
+  const [suggestions, setSuggestions] = useState([])
+  
+  // Selected province and district for filtering
+  const [selProvince, setSelProvince] = useState(location?.province || '')
+  const [selDistrict, setSelDistrict] = useState(location?.district || '')
+  
+  // Map center coordinates
+  const [mapCenter, setMapCenter] = useState(
+    location ? [location.lat, location.lng] : [-28.4541, 24.7499]  // Default: center of SA
   )
+  
+  // Map zoom level
   const [zoom, setZoom] = useState(location ? 10 : 5)
-  const [showMap,       setShowMap]       = useState(false)
+  
+  // Map visibility toggle
+  const [showMap, setShowMap] = useState(false)
 
-  // Search suggestions from saLocations
+  // ===========================================================================
+  // SEARCH SUGGESTIONS
+  // ===========================================================================
+  
+  /**
+   * Generate search suggestions based on query
+   * Searches through all towns, districts, and provinces in SA_LOCATIONS
+   */
   useEffect(() => {
-    if (query.length < 2) { setSuggestions([]); return }
+    if (query.length < 2) {
+      setSuggestions([])
+      return
+    }
+    
     const q = query.toLowerCase()
     const matches = []
+    
+    // Search through all geographic data
     for (const [province, pData] of Object.entries(SA_LOCATIONS)) {
       for (const [district, dData] of Object.entries(pData.districts)) {
+        // Check towns
         for (const town of dData.towns) {
-          if (town.name.toLowerCase().includes(q) || district.toLowerCase().includes(q) || province.toLowerCase().includes(q)) {
-            matches.push({ ...town, province, district, municipality: dData.municipalities[0] })
+          if (town.name.toLowerCase().includes(q) || 
+              district.toLowerCase().includes(q) || 
+              province.toLowerCase().includes(q)) {
+            matches.push({ 
+              ...town, 
+              province, 
+              district, 
+              municipality: dData.municipalities[0] 
+            })
           }
         }
       }
     }
+    
+    // Limit to 8 suggestions for performance
     setSuggestions(matches.slice(0, 8))
   }, [query])
 
+  // ===========================================================================
+  // LOCATION SELECTION
+  // ===========================================================================
+
+  /**
+   * Select a location from search or map click
+   * Updates all related state and notifies parent via onChange
+   * 
+   * @param {Object} loc - Location object with name, lat, lng, province, district
+   */
   const selectLocation = (loc) => {
     setQuery(loc.name)
     setSuggestions([])
@@ -81,6 +218,9 @@ export default function LocationPicker({ value, onChange, showRadius = true, sho
     onChange({ location: loc, radiusKm })
   }
 
+  /**
+   * Clear the currently selected location
+   */
   const clearLocation = () => {
     setQuery('')
     setSuggestions([])
@@ -89,18 +229,37 @@ export default function LocationPicker({ value, onChange, showRadius = true, sho
     onChange({ location: null, radiusKm })
   }
 
+  // ===========================================================================
+  // COMPUTED VALUES
+  // ===========================================================================
+
+  /**
+   * Get municipalities within the selected radius of the location
+   * Memoized to avoid recalculation on every render
+   */
   const nearbyMunicipalities = useMemo(() => {
     if (!location) return []
     return getMunicipalitiesWithinRadius(location.lat, location.lng, radiusKm)
   }, [location, radiusKm])
 
-  const districtOptions = selProvince ? Object.keys(SA_LOCATIONS[selProvince]?.districts || {}) : []
+  /**
+   * Get district options for the selected province
+   */
+  const districtOptions = selProvince 
+    ? Object.keys(SA_LOCATIONS[selProvince]?.districts || {}) 
+    : []
 
+  // ===========================================================================
+  // RENDER
+  // ===========================================================================
+  
   return (
     <div className="space-y-4">
-      {/* Search input */}
+      {/* =====================================================================
+          SEARCH INPUT
+          ===================================================================== */}
       <div className="relative">
-        <div className="flex items-center gap-2 border border-gray-200 rounded-xl bg-white px-3 py-2.5 focus-within:border-brand-400 focus-within:ring-1 focus-within:ring-brand-400">
+        <div className="flex items-center gap-2 border border-gray-200 rounded-xl bg-white px-3 py-2.5 focus-within:border-brand-400 focus-within:ring-1 focus-within:ring-brand-400 transition-shadow">
           <Search size={15} className="text-gray-400 flex-shrink-0" />
           <input
             type="text"
@@ -110,20 +269,25 @@ export default function LocationPicker({ value, onChange, showRadius = true, sho
             onChange={e => setQuery(e.target.value)}
           />
           {query && (
-            <button onClick={clearLocation} className="text-gray-400 hover:text-gray-600">
+            <button 
+              onClick={clearLocation} 
+              className="text-gray-400 hover:text-gray-600 transition-colors"
+            >
               <X size={14} />
             </button>
           )}
         </div>
 
-        {/* Suggestions dropdown */}
+        {/* =================================================================
+            SUGGESTIONS DROPDOWN
+            ================================================================= */}
         {suggestions.length > 0 && (
           <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg z-50 overflow-hidden">
             {suggestions.map((s, i) => (
               <button
                 key={i}
                 onClick={() => selectLocation(s)}
-                className="w-full flex items-start gap-3 px-4 py-3 hover:bg-gray-50 text-left border-b border-gray-50 last:border-0"
+                className="w-full flex items-start gap-3 px-4 py-3 hover:bg-gray-50 text-left border-b border-gray-50 last:border-0 transition-colors"
               >
                 <MapPin size={13} className="text-brand-400 mt-0.5 flex-shrink-0" />
                 <div>
@@ -136,12 +300,15 @@ export default function LocationPicker({ value, onChange, showRadius = true, sho
         )}
       </div>
 
-      {/* Province / District selectors */}
+      {/* =====================================================================
+          PROVINCE / DISTRICT SELECTORS
+          ===================================================================== */}
       <div className="grid grid-cols-2 gap-2">
+        {/* Province selector */}
         <div>
           <label className="text-xs text-gray-500 mb-1 block">Province</label>
           <select
-            className="w-full border border-gray-200 rounded-lg text-sm px-3 py-2 bg-white"
+            className="w-full border border-gray-200 rounded-lg text-sm px-3 py-2 bg-white focus:border-brand-400 focus:ring-1 focus:ring-brand-400"
             value={selProvince}
             onChange={e => {
               setSelProvince(e.target.value)
@@ -152,64 +319,94 @@ export default function LocationPicker({ value, onChange, showRadius = true, sho
             }}
           >
             <option value="">All provinces</option>
-            {Object.keys(SA_LOCATIONS).map(p => <option key={p} value={p}>{p}</option>)}
+            {Object.keys(SA_LOCATIONS).map(p => (
+              <option key={p} value={p}>{p}</option>
+            ))}
           </select>
         </div>
+        
+        {/* District selector */}
         <div>
           <label className="text-xs text-gray-500 mb-1 block">District</label>
           <select
-            className="w-full border border-gray-200 rounded-lg text-sm px-3 py-2 bg-white"
+            className="w-full border border-gray-200 rounded-lg text-sm px-3 py-2 bg-white focus:border-brand-400 focus:ring-1 focus:ring-brand-400 disabled:bg-gray-50 disabled:text-gray-400"
             value={selDistrict}
             onChange={e => {
               setSelDistrict(e.target.value)
               const d = SA_LOCATIONS[selProvince]?.districts[e.target.value]
-              if (d) { setMapCenter([d.lat, d.lng]); setZoom(10) }
+              if (d) { 
+                setMapCenter([d.lat, d.lng])
+                setZoom(10) 
+              }
             }}
             disabled={!selProvince}
           >
             <option value="">All districts</option>
-            {districtOptions.map(d => <option key={d} value={d}>{d}</option>)}
+            {districtOptions.map(d => (
+              <option key={d} value={d}>{d}</option>
+            ))}
           </select>
         </div>
       </div>
 
-      {/* Map toggle */}
+      {/* =====================================================================
+          MAP TOGGLE BUTTON
+          ===================================================================== */}
       <button
         onClick={() => setShowMap(v => !v)}
-        className="flex items-center gap-2 text-sm text-brand-600 hover:text-brand-800 font-medium"
+        className="flex items-center gap-2 text-sm text-brand-600 hover:text-brand-800 font-medium transition-colors"
       >
         <MapPin size={14} />
         {showMap ? 'Hide map' : 'Show interactive map'}
       </button>
 
-      {/* Leaflet map */}
+      {/* =====================================================================
+          LEAFLET MAP
+          ===================================================================== */}
       {showMap && (
         <div className="rounded-xl overflow-hidden border border-gray-200 shadow-sm">
           <MapContainer
             center={mapCenter}
             zoom={zoom}
-            style={{ height: compact ? '250px' : '380px', width: '100%' }}
+            style={{ 
+              height: compact ? '250px' : '380px', 
+              width: '100%' 
+            }}
             className="z-0"
           >
+            {/* OpenStreetMap tile layer */}
             <TileLayer
               attribution='© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
               url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
             />
+            
+            {/* Click handler — snaps to nearest known town */}
             <MapClickHandler onMapClick={(latlng) => {
-              // Snap to nearest known town
+              // Find nearest town to clicked coordinates
               let nearest = null
               let nearestDist = Infinity
+              
               for (const [province, pData] of Object.entries(SA_LOCATIONS)) {
                 for (const [district, dData] of Object.entries(pData.districts)) {
                   for (const town of dData.towns) {
                     const d = Math.hypot(town.lat - latlng.lat, town.lng - latlng.lng)
-                    if (d < nearestDist) { nearestDist = d; nearest = { ...town, province, district, municipality: dData.municipalities[0] } }
+                    if (d < nearestDist) {
+                      nearestDist = d
+                      nearest = { 
+                        ...town, 
+                        province, 
+                        district, 
+                        municipality: dData.municipalities[0] 
+                      }
+                    }
                   }
                 }
               }
+              
               if (nearest) selectLocation(nearest)
             }} />
 
+            {/* Selected location marker and radius circle */}
             {location && (
               <>
                 <Marker position={[location.lat, location.lng]}>
@@ -218,16 +415,24 @@ export default function LocationPicker({ value, onChange, showRadius = true, sho
                     {location.district} · {location.province}
                   </Popup>
                 </Marker>
+                
+                {/* Radius circle (only shown if showRadius is true) */}
                 {showRadius && (
                   <Circle
                     center={[location.lat, location.lng]}
-                    radius={radiusKm * 1000}
-                    pathOptions={{ color: '#1D9E75', fillColor: '#1D9E75', fillOpacity: 0.08, weight: 2 }}
+                    radius={radiusKm * 1000}  // Convert km to meters
+                    pathOptions={{ 
+                      color: '#1D9E75', 
+                      fillColor: '#1D9E75', 
+                      fillOpacity: 0.08, 
+                      weight: 2 
+                    }}
                   />
                 )}
               </>
             )}
 
+            {/* Town markers for selected province/district */}
             <TownMarkers
               province={selProvince}
               district={selDistrict}
@@ -236,30 +441,41 @@ export default function LocationPicker({ value, onChange, showRadius = true, sho
             />
           </MapContainer>
 
+          {/* Map help text */}
           <div className="px-3 py-2 bg-gray-50 border-t border-gray-100 text-xs text-gray-400">
             Click anywhere on the map or a marker to select a location
           </div>
         </div>
       )}
 
-      {/* Radius slider */}
+      {/* =====================================================================
+          RADIUS SLIDER
+          ===================================================================== */}
       {showRadius && location && (
         <div>
           <div className="flex items-center justify-between mb-2">
             <label className="text-sm font-medium text-gray-700">Search radius</label>
             <span className="text-sm font-semibold text-brand-600">{radiusKm} km</span>
           </div>
+          
+          {/* Slider */}
           <input
             type="range"
-            min={25} max={500} step={25}
+            min={25} 
+            max={500} 
+            step={25}
             value={radiusKm}
             onChange={e => onChange({ location, radiusKm: Number(e.target.value) })}
             className="w-full accent-brand-400"
           />
+          
+          {/* Range labels */}
           <div className="flex justify-between text-xs text-gray-400 mt-1">
             <span>25 km</span>
             <span>500 km</span>
           </div>
+          
+          {/* Quick-select radius buttons */}
           <div className="flex flex-wrap gap-1.5 mt-2">
             {RADIUS_OPTIONS.map(r => (
               <button
@@ -278,7 +494,11 @@ export default function LocationPicker({ value, onChange, showRadius = true, sho
         </div>
       )}
 
-      {/* Preview — municipalities in radius */}
+      {/* =====================================================================
+          MUNICIPALITY PREVIEW
+          =====================================================================
+          Shows municipalities that fall within the selected radius
+      */}
       {showPreview && location && nearbyMunicipalities.length > 0 && (
         <div className="bg-brand-50 border border-brand-200 rounded-xl p-4">
           <div className="flex items-center gap-2 mb-2">
@@ -287,9 +507,14 @@ export default function LocationPicker({ value, onChange, showRadius = true, sho
               {nearbyMunicipalities.length} municipalities within {radiusKm}km of {location.name}
             </p>
           </div>
+          
+          {/* Municipality badges */}
           <div className="flex flex-wrap gap-1.5">
             {nearbyMunicipalities.slice(0, 12).map(m => (
-              <span key={m} className="px-2 py-0.5 bg-white text-brand-700 text-xs rounded-full border border-brand-200">
+              <span 
+                key={m} 
+                className="px-2 py-0.5 bg-white text-brand-700 text-xs rounded-full border border-brand-200"
+              >
                 {m}
               </span>
             ))}
