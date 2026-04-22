@@ -5,37 +5,21 @@
  * This is the most comprehensive page in the application, providing:
  *   - Multi-filter search (industries, provinces, municipalities, keyword)
  *   - Location-based search with radius control
- *   - Interactive Leaflet map with tender count markers
+ *   - Interactive Leaflet map with district markers AND individual tender pins
  *   - Real-time search results with pagination
  *   - Credit tracking (search consumes credits)
  *   - Mobile-responsive tabs (filters, results, map)
- * 
- * Features:
- *   - Click province → map zooms to that province
- *   - Click map marker → see tenders in that district
- *   - "Search all in district" button from popup
- *   - Save search context to AuthContext for Dashboard
- *   - Free map data fetch (no credits consumed)
- * 
- * Layout (Desktop):
- *   ┌──────────┬─────────────────┬─────────────────┐
- *   │ Filters  │    Results      │      Map        │
- *   │ (272px)  │   (380px)       │   (remaining)   │
- *   └──────────┴─────────────────┴─────────────────┘
- * 
- * Layout (Mobile):
- *   Tabs: [Filters] [Results] [Map]
  */
 
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { searchTenders } from '../api/tenders'
-import { getMunicipalities, SA_LOCATIONS } from '../data/saLocations'
+import { getMunicipalities, SA_LOCATIONS, getTenderCoordinates, createTenderMarkerIcon } from '../data/saLocations'
 import TenderCard from '../components/TenderCard'
 import {
-  Search as SearchIcon, X, Filter, Navigation,
+  Search as SearchIcon, Filter, Navigation,
   ChevronDown, ChevronUp, Loader, TrendingUp, ExternalLink,
-  Eye, EyeOff, MapPin,
+  Eye, EyeOff,
 } from 'lucide-react'
 import { MapContainer, TileLayer, Marker, Popup, useMap, Circle } from 'react-leaflet'
 import L from 'leaflet'
@@ -48,23 +32,21 @@ import 'leaflet/dist/leaflet.css'
 delete L.Icon.Default.prototype._getIconUrl
 L.Icon.Default.mergeOptions({
   iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png',
-  iconUrl:       'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png',
-  shadowUrl:     'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
+  iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
 })
 
 // =============================================================================
 // MAP CONSTANTS
 // =============================================================================
-
-const SA_BOUNDS  = [[-35.5, 16.2], [-22.0, 33.0]]  // South Africa bounding box
-const SA_CENTER  = [-29.0, 25.0]                    // Center of South Africa
-const SA_ZOOM    = 5                                 // Default zoom (whole country)
-const PROV_ZOOM  = 7                                 // Zoom when province selected
+const SA_BOUNDS = [[-35.5, 16.2], [-22.0, 33.0]]
+const SA_CENTER = [-29.0, 25.0]
+const SA_ZOOM = 5
+const PROV_ZOOM = 7
 
 // =============================================================================
 // FILTER OPTIONS
 // =============================================================================
-
 const INDUSTRIES = [
   "Accounting, Banking & Legal","Building & Trades","Civil",
   "Cleaning & Facility Management","Consultants","Electrical & Automation",
@@ -79,7 +61,6 @@ const PROVINCES = [
   "Limpopo","Mpumalanga","North West","Northern Cape","Western Cape",
 ]
 
-// Province center coordinates for map fly-to
 const PROVINCE_CENTERS = {
   "Gauteng":[-26.27,28.11],"Western Cape":[-33.23,21.86],
   "KwaZulu-Natal":[-28.53,30.90],"Eastern Cape":[-32.30,26.42],
@@ -89,10 +70,10 @@ const PROVINCE_CENTERS = {
 }
 
 // =============================================================================
-// HELPER: Create custom marker icon with tender count
+// HELPER: District marker with tender count
 // =============================================================================
-function makeIcon(count, sel = false) {
-  const s  = count > 100 ? 52 : count > 50 ? 46 : count > 20 ? 40 : count > 5 ? 34 : 28
+function makeDistrictIcon(count, sel = false) {
+  const s = count > 100 ? 52 : count > 50 ? 46 : count > 20 ? 40 : count > 5 ? 34 : 28
   const bg = sel ? '#085041' : count > 100 ? '#1D9E75' : count > 50 ? '#2aa882'
            : count > 20 ? '#5DCAA5' : count > 5 ? '#9FE1CB' : '#c8f0e3'
   const fg = (count > 10 || sel) ? '#fff' : '#085041'
@@ -150,10 +131,10 @@ export default function Search() {
   // ===========================================================================
   // FILTER STATE
   // ===========================================================================
-  const [keyword,   setKeyword]   = useState(lastSearch?.keyword || '')
-  const [selInd,    setSelInd]    = useState(lastSearch?.industries     || user?.industry_preferences || [])
-  const [selProv,   setSelProv]   = useState(lastSearch?.provinces      || user?.province_preferences || [])
-  const [selMunis,  setSelMunis]  = useState(lastSearch?.municipalities || [])
+  const [keyword, setKeyword] = useState(lastSearch?.keyword || '')
+  const [selInd, setSelInd] = useState(lastSearch?.industries || user?.industry_preferences || [])
+  const [selProv, setSelProv] = useState(lastSearch?.provinces || user?.province_preferences || [])
+  const [selMunis, setSelMunis] = useState(lastSearch?.municipalities || [])
   const [showMunis, setShowMunis] = useState(false)
 
   // ===========================================================================
@@ -169,27 +150,27 @@ export default function Search() {
   // ===========================================================================
   // MAP STATE
   // ===========================================================================
-  const [showMap,    setShowMap]    = useState(true)
-  const [flyTarget,  setFlyTarget]  = useState(null)
-  const [mapData,    setMapData]    = useState({ districts: [], total: 0 })
+  const [showMap, setShowMap] = useState(true)
+  const [flyTarget, setFlyTarget] = useState(null)
+  const [mapData, setMapData] = useState({ districts: [], total: 0 })
   const [mapLoading, setMapLoading] = useState(false)
-  const [activePop,  setActivePop]  = useState(null)  // Currently open popup
+  const [activePop, setActivePop] = useState(null)
 
   // ===========================================================================
   // RESULTS STATE
   // ===========================================================================
-  const [results,   setResults]   = useState([])
-  const [total,     setTotal]     = useState(0)
-  const [charged,   setCharged]   = useState(0)
-  const [loading,   setLoading]   = useState(false)
-  const [searched,  setSearched]  = useState(false)
-  const [page,      setPage]      = useState(1)
+  const [results, setResults] = useState([])
+  const [total, setTotal] = useState(0)
+  const [charged, setCharged] = useState(0)
+  const [loading, setLoading] = useState(false)
+  const [searched, setSearched] = useState(false)
+  const [page, setPage] = useState(1)
 
   // ===========================================================================
   // UI STATE
   // ===========================================================================
   const [showFilters, setShowFilters] = useState(true)
-  const [mobileTab,   setMobileTab]   = useState('filters')
+  const [mobileTab, setMobileTab] = useState('filters')
 
   // ===========================================================================
   // UTILITIES
@@ -218,7 +199,7 @@ export default function Search() {
     try {
       const res = await searchTenders({
         industries: selInd,
-        provinces:  selProv,
+        provinces: selProv,
         page: 1,
         page_size: 500,
       })
@@ -248,7 +229,7 @@ export default function Search() {
           const pD = SA_LOCATIONS[t.province]
           const fd = Object.keys(pD.districts)[0]
           const dD = pD.districts[fd]
-          const k  = `${t.province}::${fd}`
+          const k = `${t.province}::${fd}`
           if (!dm[k]) dm[k] = { key: k, province: t.province, district: fd, lat: dD.lat, lng: dD.lng, municipalities: dD.municipalities, tenders: [] }
           dm[k].tenders.push(t)
         }
@@ -268,8 +249,8 @@ export default function Search() {
   // ===========================================================================
   useEffect(() => {
     if (!user) return
-    const indPref  = user.industry_preferences  || []
-    const provPref = user.province_preferences   || []
+    const indPref = user.industry_preferences || []
+    const provPref = user.province_preferences || []
     doSearch(1, indPref, provPref, [], '')
   }, [user?.id])
 
@@ -285,8 +266,8 @@ export default function Search() {
         page: p, page_size: 20,
       }
       if (useMyLoc && userLoc) {
-        payload.user_lat  = userLoc.lat
-        payload.user_lng  = userLoc.lng
+        payload.user_lat = userLoc.lat
+        payload.user_lng = userLoc.lng
         payload.radius_km = radiusKm
       }
       const res = await searchTenders(payload)
@@ -339,6 +320,7 @@ export default function Search() {
   // ===========================================================================
   const TheMap = ({ scrollWheel = true }) => (
     <div className="relative w-full h-full">
+      {/* Stats bar */}
       <div className="absolute top-3 left-3 z-10 pointer-events-none flex gap-2">
         <div className="bg-white rounded-full px-3 py-1.5 shadow border border-gray-200 flex items-center gap-1.5">
           <TrendingUp size={12} className="text-brand-400" />
@@ -349,19 +331,27 @@ export default function Search() {
         </div>
       </div>
 
+      {/* Hide map button */}
       <button onClick={() => setShowMap(false)}
-        className="absolute top-3 right-3 z-10 bg-white rounded-full px-3 py-1.5 shadow border border-gray-200 flex items-center gap-1.5 text-xs text-gray-500 hover:text-brand-600 hover:border-brand-300 transition-colors">
+        className="absolute top-3 right-3 z-10 bg-white rounded-full px-3 py-1.5 shadow border border-gray-200 flex items-center gap-1.5 text-xs text-gray-500 hover:text-brand-600">
         <EyeOff size={11} /> Hide map
       </button>
 
+      {/* Legend */}
       <div className="absolute bottom-8 right-3 z-10 bg-white rounded-xl px-3 py-2 shadow border border-gray-200">
-        <p className="text-xs text-gray-400 mb-1.5 font-medium">Tenders</p>
+        <p className="text-xs text-gray-400 mb-1.5 font-medium">Districts</p>
         {[['#c8f0e3','1–5'],['#9FE1CB','6–20'],['#5DCAA5','21–50'],['#2aa882','51–100'],['#1D9E75','100+']].map(([c,l]) => (
           <div key={l} className="flex items-center gap-1.5 mb-0.5">
             <div className="w-3 h-3 rounded-full" style={{ background: c }} />
             <span className="text-xs text-gray-500">{l}</span>
           </div>
         ))}
+        <p className="text-xs text-gray-400 mt-2 mb-1">Tender Pins</p>
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full bg-[#1D9E75]" /><span className="text-xs text-gray-500">Town</span></div>
+          <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full bg-[#F59E0B]" /><span className="text-xs text-gray-500">Municipality</span></div>
+          <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full bg-[#6B7280]" /><span className="text-xs text-gray-500">Province</span></div>
+        </div>
       </div>
 
       <MapContainer
@@ -378,11 +368,11 @@ export default function Search() {
         />
         <FlyCtrl target={flyTarget} />
 
+        {/* User location marker */}
         {useMyLoc && userLoc && (
           <>
             <Marker position={[userLoc.lat, userLoc.lng]}
               icon={L.divIcon({
-                className: '',
                 html: `<div style="width:14px;height:14px;background:#1D9E75;border:3px solid white;border-radius:50%;box-shadow:0 0 0 4px rgba(29,158,117,.2)"></div>`,
                 iconSize: [14,14], iconAnchor: [7,7],
               })}>
@@ -393,11 +383,14 @@ export default function Search() {
           </>
         )}
 
+        {/* =================================================================
+            DISTRICT MARKERS (Aggregated counts)
+            ================================================================= */}
         {visibleDistricts.map(d => {
           const count = d.tenders.length
           const isSel = activePop === d.key
           return (
-            <Marker key={d.key} position={[d.lat, d.lng]} icon={makeIcon(count, isSel)}
+            <Marker key={d.key} position={[d.lat, d.lng]} icon={makeDistrictIcon(count, isSel)}
               eventHandlers={{ click: () => setActivePop(d.key) }}>
               <Popup onClose={() => setActivePop(null)} maxWidth={300} minWidth={250}>
                 <div>
@@ -414,7 +407,7 @@ export default function Search() {
                     {d.tenders.slice(0, 5).map((t, i) => (
                       <div key={i} className="flex items-start gap-2 p-2 bg-gray-50 rounded-lg">
                         <div className="flex-1 min-w-0">
-                          <p className="text-xs font-medium text-gray-800 leading-snug" style={{ display:'-webkit-box', WebkitLineClamp:2, WebkitBoxOrient:'vertical', overflow:'hidden' }}>
+                          <p className="text-xs font-medium text-gray-800 leading-snug line-clamp-2">
                             {t.title}
                           </p>
                           <div className="flex items-center gap-1 mt-0.5 flex-wrap">
@@ -424,7 +417,7 @@ export default function Search() {
                         </div>
                         {(t.document_url || t.source_url) && (
                           <a href={t.document_url || t.source_url} target="_blank" rel="noopener noreferrer"
-                            className="flex-shrink-0 text-brand-500 hover:text-brand-700 mt-0.5"
+                            className="flex-shrink-0 text-brand-500 hover:text-brand-700"
                             onClick={e => e.stopPropagation()}>
                             <ExternalLink size={11} />
                           </a>
@@ -446,6 +439,50 @@ export default function Search() {
                     {d.municipalities.slice(0, 3).join(' · ')}
                     {d.municipalities.length > 3 ? ` +${d.municipalities.length - 3}` : ''}
                   </p>
+                </div>
+              </Popup>
+            </Marker>
+          )
+        })}
+
+        {/* =================================================================
+            INDIVIDUAL TENDER LOCATION PINS (from search results)
+            ================================================================= */}
+        {results.map((tender, index) => {
+          const coords = getTenderCoordinates(tender)
+          if (!coords) return null
+          
+          const iconConfig = createTenderMarkerIcon(coords.type)
+          
+          return (
+            <Marker
+              key={`result-pin-${tender.id || index}`}
+              position={[coords.lat, coords.lng]}
+              icon={L.divIcon(iconConfig)}
+            >
+              <Popup>
+                <div style={{ maxWidth: '220px' }}>
+                  <p className="text-xs font-semibold text-gray-900 mb-1">{tender.title}</p>
+                  <p className="text-xs text-gray-500">{tender.issuing_body}</p>
+                  <p className="text-xs text-gray-400 mt-1">
+                    📍 {coords.name}
+                    <span className="ml-1 text-gray-300">
+                      ({coords.type === 'town' ? 'Town' : coords.type === 'municipality' ? 'Municipality' : 'Province'})
+                    </span>
+                  </p>
+                  {tender.closing_date && (
+                    <p className="text-xs text-red-500 mt-1">⏰ Closes {tender.closing_date}</p>
+                  )}
+                  {(tender.document_url || tender.source_url) && (
+                    <a 
+                      href={tender.document_url || tender.source_url} 
+                      target="_blank" 
+                      rel="noopener noreferrer" 
+                      className="inline-block mt-2 text-xs text-brand-600 hover:text-brand-800"
+                    >
+                      View tender →
+                    </a>
+                  )}
                 </div>
               </Popup>
             </Marker>
@@ -644,7 +681,7 @@ export default function Search() {
           {[
             { id: 'filters', label: 'Filters', badge: filterCount },
             { id: 'results', label: total > 0 ? `Results (${total})` : 'Results' },
-            { id: 'map',     label: 'Map' },
+            { id: 'map', label: 'Map' },
           ].map(tab => (
             <button key={tab.id} onClick={() => setMobileTab(tab.id)}
               className={`flex-1 flex items-center justify-center gap-1 py-3 text-xs font-medium border-b-2 transition-colors ${
@@ -658,7 +695,7 @@ export default function Search() {
         <div className="flex-1 overflow-hidden">
           {mobileTab === 'filters' && <FiltersPanel />}
           {mobileTab === 'results' && <ResultsPanel />}
-          {mobileTab === 'map'     && <div className="h-full"><TheMap scrollWheel={false} /></div>}
+          {mobileTab === 'map' && <div className="h-full"><TheMap scrollWheel={false} /></div>}
         </div>
       </div>
 
