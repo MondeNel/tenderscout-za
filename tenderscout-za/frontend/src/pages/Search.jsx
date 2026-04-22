@@ -1,20 +1,12 @@
 /**
  * File: src/pages/Search.jsx
  * Purpose: Advanced Tender Search Page with Interactive Map
- * 
- * This is the most comprehensive page in the application, providing:
- *   - Multi-filter search (industries, provinces, municipalities, keyword)
- *   - Location-based search with radius control
- *   - Interactive Leaflet map with district markers AND individual tender pins
- *   - Real-time search results with pagination
- *   - Credit tracking (search consumes credits)
- *   - Mobile-responsive tabs (filters, results, map)
  */
 
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { searchTenders } from '../api/tenders'
-import { getMunicipalities, SA_LOCATIONS, getTenderCoordinates, createTenderMarkerIcon } from '../data/saLocations'
+import { getMunicipalities, SA_LOCATIONS, groupTendersByLocation, createGroupedMarkerIcon } from '../data/saLocations'
 import TenderCard from '../components/TenderCard'
 import {
   Search as SearchIcon, Filter, Navigation,
@@ -128,18 +120,12 @@ function Chip({ label, selected, onClick, small = false }) {
 export default function Search() {
   const { user, refreshUser, lastSearch, saveLastSearch } = useAuth()
 
-  // ===========================================================================
-  // FILTER STATE
-  // ===========================================================================
   const [keyword, setKeyword] = useState(lastSearch?.keyword || '')
   const [selInd, setSelInd] = useState(lastSearch?.industries || user?.industry_preferences || [])
   const [selProv, setSelProv] = useState(lastSearch?.provinces || user?.province_preferences || [])
   const [selMunis, setSelMunis] = useState(lastSearch?.municipalities || [])
   const [showMunis, setShowMunis] = useState(false)
 
-  // ===========================================================================
-  // LOCATION STATE
-  // ===========================================================================
   const [useMyLoc, setUseMyLoc] = useState(false)
   const [radiusKm, setRadiusKm] = useState(user?.search_radius_km || 100)
   const userLoc = useMemo(() => {
@@ -147,18 +133,12 @@ export default function Search() {
     return { lat: user.business_lat, lng: user.business_lng, name: user.business_location || 'My location' }
   }, [user])
 
-  // ===========================================================================
-  // MAP STATE
-  // ===========================================================================
   const [showMap, setShowMap] = useState(true)
   const [flyTarget, setFlyTarget] = useState(null)
   const [mapData, setMapData] = useState({ districts: [], total: 0 })
   const [mapLoading, setMapLoading] = useState(false)
   const [activePop, setActivePop] = useState(null)
 
-  // ===========================================================================
-  // RESULTS STATE
-  // ===========================================================================
   const [results, setResults] = useState([])
   const [total, setTotal] = useState(0)
   const [charged, setCharged] = useState(0)
@@ -166,23 +146,14 @@ export default function Search() {
   const [searched, setSearched] = useState(false)
   const [page, setPage] = useState(1)
 
-  // ===========================================================================
-  // UI STATE
-  // ===========================================================================
   const [showFilters, setShowFilters] = useState(true)
   const [mobileTab, setMobileTab] = useState('filters')
 
-  // ===========================================================================
-  // UTILITIES
-  // ===========================================================================
   const tog = (list, set, v) =>
     set(list.includes(v) ? list.filter(x => x !== v) : [...list, v])
 
   const filterCount = selInd.length + selProv.length + selMunis.length + (useMyLoc && userLoc ? 1 : 0)
 
-  // ===========================================================================
-  // PROVINCE TOGGLE WITH MAP FLY-TO
-  // ===========================================================================
   const handleProvToggle = (prov) => {
     const adding = !selProv.includes(prov)
     setSelProv(prev => adding ? [...prev, prov] : prev.filter(v => v !== prov))
@@ -191,19 +162,10 @@ export default function Search() {
     else setFlyTarget({ c: SA_CENTER, z: SA_ZOOM, key: 'sa' + Date.now() })
   }
 
-  // ===========================================================================
-  // FETCH MAP DATA (Free - no credits consumed)
-  // ===========================================================================
   const fetchMapData = useCallback(async () => {
     setMapLoading(true)
     try {
-      const res = await searchTenders({
-        industries: selInd,
-        provinces: selProv,
-        page: 1,
-        page_size: 500,
-      })
-
+      const res = await searchTenders({ industries: selInd, provinces: selProv, page: 1, page_size: 500 })
       const dm = {}
       for (const t of res.data.results) {
         let placed = false
@@ -211,8 +173,7 @@ export default function Search() {
           if (t.province && t.province !== prov) continue
           for (const [dist, dD] of Object.entries(pD.districts)) {
             const inMuni = dD.municipalities.some(m =>
-              t.municipality &&
-              m.toLowerCase().split(' ')[0] === t.municipality.toLowerCase().split(' ')[0]
+              t.municipality && m.toLowerCase().split(' ')[0] === t.municipality.toLowerCase().split(' ')[0]
             )
             const byProv = t.province === prov && !t.municipality
             if (inMuni || byProv) {
@@ -244,9 +205,6 @@ export default function Search() {
 
   useEffect(() => { fetchMapData() }, [fetchMapData])
 
-  // ===========================================================================
-  // AUTO-LOAD ON MOUNT
-  // ===========================================================================
   useEffect(() => {
     if (!user) return
     const indPref = user.industry_preferences || []
@@ -254,22 +212,11 @@ export default function Search() {
     doSearch(1, indPref, provPref, [], '')
   }, [user?.id])
 
-  // ===========================================================================
-  // SEARCH EXECUTION
-  // ===========================================================================
   const doSearch = async (p = 1, industries = selInd, provinces = selProv, munis = selMunis, kw = keyword) => {
     setLoading(true)
     try {
-      const payload = {
-        industries, provinces, municipalities: munis,
-        keyword: kw || undefined,
-        page: p, page_size: 20,
-      }
-      if (useMyLoc && userLoc) {
-        payload.user_lat = userLoc.lat
-        payload.user_lng = userLoc.lng
-        payload.radius_km = radiusKm
-      }
+      const payload = { industries, provinces, municipalities: munis, keyword: kw || undefined, page: p, page_size: 20 }
+      if (useMyLoc && userLoc) { payload.user_lat = userLoc.lat; payload.user_lng = userLoc.lng; payload.radius_km = radiusKm }
       const res = await searchTenders(payload)
       setResults(res.data.results)
       setTotal(res.data.total)
@@ -278,10 +225,9 @@ export default function Search() {
       setSearched(true)
       await refreshUser()
       saveLastSearch({ industries, provinces, municipalities: munis, keyword: kw })
-
       if (res.data.results.length === 0 && (industries.length || provinces.length || munis.length || kw)) {
         toast('No tenders found — try broader filters', { icon: '🔍' })
-      } else if (res.data.results.length > 0 && p === 1 && (industries.length || provinces.length || munis.length || kw)) {
+      } else if (res.data.results.length > 0 && p === 1) {
         toast.success(`${res.data.total} tenders found`)
         setMobileTab('results')
       }
@@ -302,9 +248,6 @@ export default function Search() {
     doSearch(1, [], [], [], '')
   }
 
-  // ===========================================================================
-  // COMPUTED VALUES
-  // ===========================================================================
   const muniList = useMemo(() =>
     selProv.length ? selProv.flatMap(p => getMunicipalities(p)) : getMunicipalities()
   , [selProv])
@@ -315,29 +258,24 @@ export default function Search() {
     )
   , [mapData, selProv])
 
-  // ===========================================================================
-  // MAP COMPONENT
-  // ===========================================================================
+  // Group search results by location for cleaner map pins
+  const groupedLocations = useMemo(() => groupTendersByLocation(results), [results])
+
   const TheMap = ({ scrollWheel = true }) => (
     <div className="relative w-full h-full">
-      {/* Stats bar */}
       <div className="absolute top-3 left-3 z-10 pointer-events-none flex gap-2">
         <div className="bg-white rounded-full px-3 py-1.5 shadow border border-gray-200 flex items-center gap-1.5">
           <TrendingUp size={12} className="text-brand-400" />
-          <span className="text-xs font-semibold text-gray-700">
-            {mapData.total} tender{mapData.total !== 1 ? 's' : ''}
-          </span>
+          <span className="text-xs font-semibold text-gray-700">{mapData.total} tender{mapData.total !== 1 ? 's' : ''}</span>
           {mapLoading && <Loader size={11} className="animate-spin text-gray-300 ml-1" />}
         </div>
       </div>
 
-      {/* Hide map button */}
       <button onClick={() => setShowMap(false)}
         className="absolute top-3 right-3 z-10 bg-white rounded-full px-3 py-1.5 shadow border border-gray-200 flex items-center gap-1.5 text-xs text-gray-500 hover:text-brand-600">
         <EyeOff size={11} /> Hide map
       </button>
 
-      {/* Legend */}
       <div className="absolute bottom-8 right-3 z-10 bg-white rounded-xl px-3 py-2 shadow border border-gray-200">
         <p className="text-xs text-gray-400 mb-1.5 font-medium">Districts</p>
         {[['#c8f0e3','1–5'],['#9FE1CB','6–20'],['#5DCAA5','21–50'],['#2aa882','51–100'],['#1D9E75','100+']].map(([c,l]) => (
@@ -346,7 +284,7 @@ export default function Search() {
             <span className="text-xs text-gray-500">{l}</span>
           </div>
         ))}
-        <p className="text-xs text-gray-400 mt-2 mb-1">Tender Pins</p>
+        <p className="text-xs text-gray-400 mt-2 mb-1">Locations</p>
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full bg-[#1D9E75]" /><span className="text-xs text-gray-500">Town</span></div>
           <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full bg-[#F59E0B]" /><span className="text-xs text-gray-500">Municipality</span></div>
@@ -354,28 +292,15 @@ export default function Search() {
         </div>
       </div>
 
-      <MapContainer
-        center={SA_CENTER} zoom={SA_ZOOM}
-        maxBounds={SA_BOUNDS} maxBoundsViscosity={1.0}
-        minZoom={5} maxZoom={14}
-        style={{ height: '100%', width: '100%' }}
-        scrollWheelZoom={scrollWheel}
-      >
-        <TileLayer
-          attribution='© <a href="https://www.openstreetmap.org">OpenStreetMap</a>'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          bounds={SA_BOUNDS}
-        />
+      <MapContainer center={SA_CENTER} zoom={SA_ZOOM} maxBounds={SA_BOUNDS} maxBoundsViscosity={1.0} minZoom={5} maxZoom={14}
+        style={{ height: '100%', width: '100%' }} scrollWheelZoom={scrollWheel}>
+        <TileLayer attribution='© <a href="https://www.openstreetmap.org">OpenStreetMap</a>' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" bounds={SA_BOUNDS} />
         <FlyCtrl target={flyTarget} />
 
-        {/* User location marker */}
         {useMyLoc && userLoc && (
           <>
             <Marker position={[userLoc.lat, userLoc.lng]}
-              icon={L.divIcon({
-                html: `<div style="width:14px;height:14px;background:#1D9E75;border:3px solid white;border-radius:50%;box-shadow:0 0 0 4px rgba(29,158,117,.2)"></div>`,
-                iconSize: [14,14], iconAnchor: [7,7],
-              })}>
+              icon={L.divIcon({ html: `<div style="width:14px;height:14px;background:#1D9E75;border:3px solid white;border-radius:50%;box-shadow:0 0 0 4px rgba(29,158,117,.2)"></div>`, iconSize: [14,14], iconAnchor: [7,7] })}>
               <Popup><strong>{userLoc.name}</strong><br />Your business location</Popup>
             </Marker>
             <Circle center={[userLoc.lat, userLoc.lng]} radius={radiusKm * 1000}
@@ -383,9 +308,7 @@ export default function Search() {
           </>
         )}
 
-        {/* =================================================================
-            DISTRICT MARKERS (Aggregated counts)
-            ================================================================= */}
+        {/* District Markers */}
         {visibleDistricts.map(d => {
           const count = d.tenders.length
           const isSel = activePop === d.key
@@ -395,50 +318,28 @@ export default function Search() {
               <Popup onClose={() => setActivePop(null)} maxWidth={300} minWidth={250}>
                 <div>
                   <div className="flex items-center justify-between mb-2 pb-2 border-b border-gray-100">
-                    <div>
-                      <p className="text-sm font-semibold text-gray-900">{d.district}</p>
-                      <p className="text-xs text-gray-400">{d.province}</p>
-                    </div>
-                    <span className="px-2 py-0.5 bg-brand-50 text-brand-700 text-xs font-bold rounded-full border border-brand-200">
-                      {count} tender{count !== 1 ? 's' : ''}
-                    </span>
+                    <div><p className="text-sm font-semibold text-gray-900">{d.district}</p><p className="text-xs text-gray-400">{d.province}</p></div>
+                    <span className="px-2 py-0.5 bg-brand-50 text-brand-700 text-xs font-bold rounded-full border border-brand-200">{count} tender{count !== 1 ? 's' : ''}</span>
                   </div>
                   <div className="space-y-1.5 max-h-52 overflow-y-auto">
                     {d.tenders.slice(0, 5).map((t, i) => (
                       <div key={i} className="flex items-start gap-2 p-2 bg-gray-50 rounded-lg">
                         <div className="flex-1 min-w-0">
-                          <p className="text-xs font-medium text-gray-800 leading-snug line-clamp-2">
-                            {t.title}
-                          </p>
+                          <p className="text-xs font-medium text-gray-800 line-clamp-2">{t.title}</p>
                           <div className="flex items-center gap-1 mt-0.5 flex-wrap">
                             {t.issuing_body && <span className="text-xs text-gray-400 truncate max-w-[120px]">{t.issuing_body}</span>}
                             {t.closing_date && <span className="text-xs text-red-500 flex-shrink-0">· {t.closing_date}</span>}
                           </div>
                         </div>
                         {(t.document_url || t.source_url) && (
-                          <a href={t.document_url || t.source_url} target="_blank" rel="noopener noreferrer"
-                            className="flex-shrink-0 text-brand-500 hover:text-brand-700"
-                            onClick={e => e.stopPropagation()}>
-                            <ExternalLink size={11} />
-                          </a>
+                          <a href={t.document_url || t.source_url} target="_blank" rel="noopener noreferrer" className="flex-shrink-0 text-brand-500 hover:text-brand-700" onClick={e => e.stopPropagation()}><ExternalLink size={11} /></a>
                         )}
                       </div>
                     ))}
                   </div>
-                  <button
-                    onClick={() => {
-                      const munis = d.municipalities.slice(0, 3)
-                      setSelMunis(munis)
-                      if (!selProv.includes(d.province)) setSelProv(p => [...p, d.province])
-                      doSearch(1, selInd, selProv.includes(d.province) ? selProv : [...selProv, d.province], munis, keyword)
-                    }}
-                    className="mt-2 w-full py-1.5 text-xs bg-brand-400 hover:bg-brand-600 text-white rounded-lg font-medium transition-colors">
-                    Search all {count} tenders in {d.district} →
-                  </button>
-                  <p className="text-xs text-gray-400 mt-1.5">
-                    {d.municipalities.slice(0, 3).join(' · ')}
-                    {d.municipalities.length > 3 ? ` +${d.municipalities.length - 3}` : ''}
-                  </p>
+                  <button onClick={() => { setSelMunis(d.municipalities.slice(0, 3)); if (!selProv.includes(d.province)) setSelProv(p => [...p, d.province]); doSearch(1, selInd, selProv.includes(d.province) ? selProv : [...selProv, d.province], d.municipalities.slice(0, 3), keyword) }}
+                    className="mt-2 w-full py-1.5 text-xs bg-brand-400 hover:bg-brand-600 text-white rounded-lg font-medium">Search all {count} tenders →</button>
+                  <p className="text-xs text-gray-400 mt-1.5">{d.municipalities.slice(0, 3).join(' · ')}{d.municipalities.length > 3 ? ` +${d.municipalities.length - 3}` : ''}</p>
                 </div>
               </Popup>
             </Marker>
@@ -446,42 +347,44 @@ export default function Search() {
         })}
 
         {/* =================================================================
-            INDIVIDUAL TENDER LOCATION PINS (from search results)
+            GROUPED LOCATION PINS (with tender counts in header)
             ================================================================= */}
-        {results.map((tender, index) => {
-          const coords = getTenderCoordinates(tender)
-          if (!coords) return null
-          
-          const iconConfig = createTenderMarkerIcon(coords.type)
+        {groupedLocations.map((group, index) => {
+          const iconConfig = createGroupedMarkerIcon(group.count, group.type)
           
           return (
-            <Marker
-              key={`result-pin-${tender.id || index}`}
-              position={[coords.lat, coords.lng]}
-              icon={L.divIcon(iconConfig)}
-            >
-              <Popup>
-                <div style={{ maxWidth: '220px' }}>
-                  <p className="text-xs font-semibold text-gray-900 mb-1">{tender.title}</p>
-                  <p className="text-xs text-gray-500">{tender.issuing_body}</p>
-                  <p className="text-xs text-gray-400 mt-1">
-                    📍 {coords.name}
-                    <span className="ml-1 text-gray-300">
-                      ({coords.type === 'town' ? 'Town' : coords.type === 'municipality' ? 'Municipality' : 'Province'})
+            <Marker key={`group-${index}`} position={[group.lat, group.lng]} icon={L.divIcon(iconConfig)}>
+              <Popup maxWidth={300} minWidth={250}>
+                <div>
+                  {/* Header with location name and tender count */}
+                  <div className="flex items-center justify-between mb-2 pb-2 border-b border-gray-100">
+                    <div>
+                      <p className="text-sm font-semibold text-gray-900">{group.name}</p>
+                      <p className="text-xs text-gray-400 capitalize">{group.type}</p>
+                    </div>
+                    <span className="px-2 py-0.5 bg-brand-50 text-brand-700 text-xs font-bold rounded-full border border-brand-200">
+                      {group.count} tender{group.count !== 1 ? 's' : ''}
                     </span>
-                  </p>
-                  {tender.closing_date && (
-                    <p className="text-xs text-red-500 mt-1">⏰ Closes {tender.closing_date}</p>
-                  )}
-                  {(tender.document_url || tender.source_url) && (
-                    <a 
-                      href={tender.document_url || tender.source_url} 
-                      target="_blank" 
-                      rel="noopener noreferrer" 
-                      className="inline-block mt-2 text-xs text-brand-600 hover:text-brand-800"
-                    >
-                      View tender →
-                    </a>
+                  </div>
+                  
+                  {/* Tender list */}
+                  <div className="space-y-1.5 max-h-52 overflow-y-auto">
+                    {group.tenders.slice(0, 5).map((t, i) => (
+                      <div key={i} className="flex items-start gap-2 p-2 bg-gray-50 rounded-lg">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-medium text-gray-800 line-clamp-2">{t.title}</p>
+                          <p className="text-xs text-gray-400 mt-0.5">{t.issuing_body}</p>
+                          {t.closing_date && <p className="text-xs text-red-500 mt-0.5">Closes {t.closing_date}</p>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  
+                  {/* Footer with "+X more" if needed */}
+                  {group.count > 5 && (
+                    <p className="text-xs text-gray-400 mt-2 pt-2 border-t border-gray-100">
+                      +{group.count - 5} more tender{group.count - 5 !== 1 ? 's' : ''}
+                    </p>
                   )}
                 </div>
               </Popup>
@@ -492,106 +395,58 @@ export default function Search() {
     </div>
   )
 
-  // ===========================================================================
-  // FILTERS PANEL
-  // ===========================================================================
   const FiltersPanel = () => (
     <div className="h-full overflow-y-auto bg-white">
       <div className="p-4 space-y-5">
         <div className="relative">
           <SearchIcon size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-          <input className="input pl-9 text-sm" placeholder="Keyword..."
-            value={keyword} onChange={e => setKeyword(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && handleSearch()} />
+          <input className="input pl-9 text-sm" placeholder="Keyword..." value={keyword} onChange={e => setKeyword(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSearch()} />
         </div>
-
         <div>
           <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Industry</p>
-          <div className="flex flex-wrap gap-1.5">
-            {INDUSTRIES.map(i => <Chip key={i} label={i} selected={selInd.includes(i)} onClick={() => tog(selInd, setSelInd, i)} />)}
-          </div>
+          <div className="flex flex-wrap gap-1.5">{INDUSTRIES.map(i => <Chip key={i} label={i} selected={selInd.includes(i)} onClick={() => tog(selInd, setSelInd, i)} />)}</div>
         </div>
-
         <div>
-          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">
-            Province <span className="font-normal text-gray-300 normal-case">(click to zoom map)</span>
-          </p>
-          <div className="flex flex-wrap gap-1.5">
-            {PROVINCES.map(p => <Chip key={p} label={p} selected={selProv.includes(p)} onClick={() => handleProvToggle(p)} />)}
-          </div>
+          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">Province <span className="font-normal text-gray-300 normal-case">(click to zoom map)</span></p>
+          <div className="flex flex-wrap gap-1.5">{PROVINCES.map(p => <Chip key={p} label={p} selected={selProv.includes(p)} onClick={() => handleProvToggle(p)} />)}</div>
         </div>
-
         {userLoc && (
           <div>
             <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Location</p>
-            <button onClick={() => {
-              const n = !useMyLoc
-              setUseMyLoc(n)
-              if (n) setFlyTarget({ c: [userLoc.lat, userLoc.lng], z: 8, key: 'loc' + Date.now() })
-            }} className={`flex items-center gap-1.5 px-3 py-2 rounded-lg border text-xs w-full transition-colors ${
-              useMyLoc ? 'bg-brand-50 border-brand-300 text-brand-700' : 'border-gray-200 text-gray-600 hover:border-brand-300'
-            }`}>
-              <Navigation size={12} />
-              {useMyLoc ? `✓ ${userLoc.name}` : `Use my business location (${userLoc.name})`}
+            <button onClick={() => { const n = !useMyLoc; setUseMyLoc(n); if (n) setFlyTarget({ c: [userLoc.lat, userLoc.lng], z: 8, key: 'loc' + Date.now() }) }}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg border text-xs w-full ${useMyLoc ? 'bg-brand-50 border-brand-300 text-brand-700' : 'border-gray-200 text-gray-600 hover:border-brand-300'}`}>
+              <Navigation size={12} />{useMyLoc ? `✓ ${userLoc.name}` : `Use my business location (${userLoc.name})`}
             </button>
             {useMyLoc && (
               <div className="mt-2 px-1">
-                <div className="flex justify-between text-xs text-gray-500 mb-1">
-                  <span>Radius</span>
-                  <span className="font-semibold text-brand-600">{radiusKm}km</span>
-                </div>
-                <input type="range" min={25} max={500} step={25} value={radiusKm}
-                  onChange={e => setRadiusKm(Number(e.target.value))} className="w-full accent-brand-400" />
+                <div className="flex justify-between text-xs text-gray-500 mb-1"><span>Radius</span><span className="font-semibold text-brand-600">{radiusKm}km</span></div>
+                <input type="range" min={25} max={500} step={25} value={radiusKm} onChange={e => setRadiusKm(Number(e.target.value))} className="w-full accent-brand-400" />
               </div>
             )}
           </div>
         )}
-
         <div>
-          <button onClick={() => setShowMunis(v => !v)}
-            className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-700 font-medium">
-            {showMunis ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
-            Municipality filter
-            {selMunis.length > 0 && <span className="px-1.5 py-0.5 bg-brand-100 text-brand-700 rounded-full">{selMunis.length}</span>}
+          <button onClick={() => setShowMunis(v => !v)} className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-700 font-medium">
+            {showMunis ? <ChevronUp size={11} /> : <ChevronDown size={11} />} Municipality filter {selMunis.length > 0 && <span className="px-1.5 py-0.5 bg-brand-100 text-brand-700 rounded-full">{selMunis.length}</span>}
           </button>
-          {showMunis && (
-            <div className="mt-2 max-h-36 overflow-y-auto flex flex-wrap gap-1.5">
-              {muniList.slice(0, 60).map(m => <Chip key={m} label={m} small selected={selMunis.includes(m)} onClick={() => tog(selMunis, setSelMunis, m)} />)}
-            </div>
-          )}
+          {showMunis && <div className="mt-2 max-h-36 overflow-y-auto flex flex-wrap gap-1.5">{muniList.slice(0, 60).map(m => <Chip key={m} label={m} small selected={selMunis.includes(m)} onClick={() => tog(selMunis, setSelMunis, m)} />)}</div>}
         </div>
-
         <div className="hidden md:flex items-center justify-between py-2 border-t border-gray-100">
           <span className="text-xs text-gray-500">Map</span>
-          <button onClick={() => setShowMap(v => !v)}
-            className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${
-              showMap ? 'bg-brand-50 border-brand-200 text-brand-700' : 'bg-white border-gray-200 text-gray-500'
-            }`}>
+          <button onClick={() => setShowMap(v => !v)} className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border ${showMap ? 'bg-brand-50 border-brand-200 text-brand-700' : 'bg-white border-gray-200 text-gray-500'}`}>
             {showMap ? <><Eye size={11} /> On</> : <><EyeOff size={11} /> Off</>}
           </button>
         </div>
-
         <div className="pb-2 space-y-2">
-          <button onClick={handleSearch} disabled={loading}
-            className="btn-primary w-full py-2.5 text-sm flex items-center justify-center gap-2">
-            {loading
-              ? <><Loader size={14} className="animate-spin" /> Searching...</>
-              : <>Search{filterCount > 0 ? ` (${filterCount} filter${filterCount > 1 ? 's' : ''})` : ''}</>
-            }
+          <button onClick={handleSearch} disabled={loading} className="btn-primary w-full py-2.5 text-sm flex items-center justify-center gap-2">
+            {loading ? <><Loader size={14} className="animate-spin" /> Searching...</> : <>Search{filterCount > 0 ? ` (${filterCount} filter${filterCount > 1 ? 's' : ''})` : ''}</>}
           </button>
-          {filterCount > 0 && (
-            <button onClick={clearFilters} className="w-full text-xs text-gray-400 hover:text-gray-600 py-1">
-              Clear all filters
-            </button>
-          )}
+          {filterCount > 0 && <button onClick={clearFilters} className="w-full text-xs text-gray-400 hover:text-gray-600 py-1">Clear all filters</button>}
         </div>
       </div>
     </div>
   )
 
-  // ===========================================================================
-  // RESULTS PANEL
-  // ===========================================================================
   const ResultsPanel = () => (
     <div className="h-full overflow-y-auto bg-gray-50">
       <div className="p-4 space-y-3">
@@ -601,23 +456,19 @@ export default function Search() {
             {charged > 0 && <p className="text-xs text-gray-400">{charged} credit{charged !== 1 ? 's' : ''} used</p>}
           </div>
         )}
-
         {loading && (
           <div className="flex flex-col items-center justify-center py-24 gap-3">
             <div className="w-8 h-8 border-2 border-brand-400 border-t-transparent rounded-full animate-spin" />
             <p className="text-sm text-gray-400">Loading tenders...</p>
           </div>
         )}
-
         {!loading && searched && results.length === 0 && (
           <div className="flex flex-col items-center justify-center py-20 gap-2 text-center">
             <p className="text-sm text-gray-500">No tenders found</p>
             <p className="text-xs text-gray-400">Try removing filters or selecting a different province</p>
           </div>
         )}
-
         {!loading && results.map(t => <TenderCard key={t.id} tender={t} showBadgeColor />)}
-
         {total > 20 && !loading && (
           <div className="flex items-center justify-center gap-3 pt-2 pb-4">
             <button onClick={() => doSearch(page - 1)} disabled={page === 1} className="btn-secondary text-xs py-1.5 px-3">← Prev</button>
@@ -629,9 +480,6 @@ export default function Search() {
     </div>
   )
 
-  // ===========================================================================
-  // RENDER
-  // ===========================================================================
   return (
     <div className="flex flex-col overflow-hidden" style={{ height: 'calc(100vh - 0px)' }}>
       <div className="flex-shrink-0 bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between gap-3">
@@ -640,55 +488,30 @@ export default function Search() {
           {searched && <p className="text-xs text-gray-400">{total} results{charged > 0 ? ` · ${charged} credit${charged !== 1 ? 's' : ''} used` : ''}</p>}
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
-          <button onClick={() => setShowMap(v => !v)}
-            className={`hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs transition-colors ${
-              showMap ? 'bg-brand-50 border-brand-200 text-brand-700' : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'
-            }`}>
+          <button onClick={() => setShowMap(v => !v)} className={`hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs ${showMap ? 'bg-brand-50 border-brand-200 text-brand-700' : 'bg-white border-gray-200 text-gray-500'}`}>
             {showMap ? <><Eye size={12} /> Map on</> : <><EyeOff size={12} /> Map off</>}
           </button>
-          <button onClick={() => setShowFilters(v => !v)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs transition-colors ${
-              showFilters ? 'bg-brand-50 border-brand-200 text-brand-700' : 'bg-white border-gray-200 text-gray-600'
-            }`}>
-            <Filter size={12} /> Filters
-            {filterCount > 0 && <span className="bg-brand-400 text-white rounded-full px-1.5 py-0.5 text-xs">{filterCount}</span>}
+          <button onClick={() => setShowFilters(v => !v)} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs ${showFilters ? 'bg-brand-50 border-brand-200 text-brand-700' : 'bg-white border-gray-200 text-gray-600'}`}>
+            <Filter size={12} /> Filters {filterCount > 0 && <span className="bg-brand-400 text-white rounded-full px-1.5 py-0.5 text-xs">{filterCount}</span>}
           </button>
         </div>
       </div>
 
       <div className="hidden md:flex flex-1 overflow-hidden">
-        {showFilters && (
-          <div className="w-72 flex-shrink-0 border-r border-gray-200 overflow-hidden">
-            <FiltersPanel />
-          </div>
-        )}
-
+        {showFilters && <div className="w-72 flex-shrink-0 border-r border-gray-200 overflow-hidden"><FiltersPanel /></div>}
         <div className="flex-1 flex overflow-hidden">
           <div className={`flex flex-col overflow-hidden border-r border-gray-200 ${showMap ? 'w-[380px] flex-shrink-0' : 'flex-1'}`}>
             <div className="flex-1 overflow-y-auto"><ResultsPanel /></div>
           </div>
-
-          {showMap && (
-            <div className="flex-1 relative overflow-hidden">
-              <TheMap scrollWheel />
-            </div>
-          )}
+          {showMap && <div className="flex-1 relative overflow-hidden"><TheMap scrollWheel /></div>}
         </div>
       </div>
 
       <div className="md:hidden flex-1 flex flex-col overflow-hidden">
         <div className="flex-shrink-0 flex border-b border-gray-200 bg-white">
-          {[
-            { id: 'filters', label: 'Filters', badge: filterCount },
-            { id: 'results', label: total > 0 ? `Results (${total})` : 'Results' },
-            { id: 'map', label: 'Map' },
-          ].map(tab => (
-            <button key={tab.id} onClick={() => setMobileTab(tab.id)}
-              className={`flex-1 flex items-center justify-center gap-1 py-3 text-xs font-medium border-b-2 transition-colors ${
-                mobileTab === tab.id ? 'border-brand-400 text-brand-600' : 'border-transparent text-gray-500'
-              }`}>
-              {tab.label}
-              {tab.badge > 0 && <span className="bg-brand-400 text-white rounded-full px-1.5 py-0.5 text-xs">{tab.badge}</span>}
+          {[{ id: 'filters', label: 'Filters', badge: filterCount }, { id: 'results', label: total > 0 ? `Results (${total})` : 'Results' }, { id: 'map', label: 'Map' }].map(tab => (
+            <button key={tab.id} onClick={() => setMobileTab(tab.id)} className={`flex-1 flex items-center justify-center gap-1 py-3 text-xs font-medium border-b-2 ${mobileTab === tab.id ? 'border-brand-400 text-brand-600' : 'border-transparent text-gray-500'}`}>
+              {tab.label}{tab.badge > 0 && <span className="bg-brand-400 text-white rounded-full px-1.5 py-0.5 text-xs">{tab.badge}</span>}
             </button>
           ))}
         </div>
@@ -700,20 +523,10 @@ export default function Search() {
       </div>
 
       <style>{`
-        .leaflet-popup-content-wrapper {
-          border-radius: 12px !important;
-          border: 1px solid #e5e7eb !important;
-          box-shadow: 0 8px 24px rgba(0,0,0,.12) !important;
-          padding: 0 !important;
-        }
+        .leaflet-popup-content-wrapper { border-radius: 12px !important; border: 1px solid #e5e7eb !important; box-shadow: 0 8px 24px rgba(0,0,0,.12) !important; padding: 0 !important; }
         .leaflet-popup-content { margin: 12px !important; min-width: 0 !important; }
         .leaflet-popup-tip { background: white !important; }
-        .leaflet-control-zoom {
-          border: 1px solid #e5e7eb !important;
-          border-radius: 8px !important;
-          overflow: hidden;
-          box-shadow: 0 2px 8px rgba(0,0,0,.1) !important;
-        }
+        .leaflet-control-zoom { border: 1px solid #e5e7eb !important; border-radius: 8px !important; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,.1) !important; }
         .leaflet-control-zoom a { color: #374151 !important; border-color: #e5e7eb !important; }
       `}</style>
     </div>
