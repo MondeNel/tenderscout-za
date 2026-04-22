@@ -397,44 +397,115 @@ async def crawl_site(
 # These are the starting points for the crawler to discover tender pages.
 # =============================================================================
 
+# =============================================================================
+# CRAWL TARGETS — Balanced coverage across all 9 provinces
+# =============================================================================
+# Each province has metropolitan + district municipalities for balanced coverage.
+# Dead domains and failing sites have been removed.
+# =============================================================================
+
 CRAWL_TARGETS = [
     # =========================================================================
-    # METROS — Confirmed working
+    # GAUTENG (Economic hub — 3 metros)
     # =========================================================================
-    {"name": "City of Cape Town",      "seed_url": "https://web1.capetown.gov.za/web1/procurementportal/", "max_depth": 2, "max_pages": 30},
-    {"name": "City of Johannesburg", "seed_url": "https://www.joburg.org.za/tenders", "max_depth": 2, "max_pages": 30},
-    {"name": "City of Ekurhuleni",     "seed_url": "https://www.ekurhuleni.gov.za/tenders",                "max_depth": 3, "max_pages": 50},
-    {"name": "Buffalo City Metro",     "seed_url": "https://www.buffalocity.gov.za/tenders",               "max_depth": 3, "max_pages": 40},
-    {"name": "Nelson Mandela Bay",     "seed_url": "https://www.nelsonmandelabay.gov.za/tenders",          "max_depth": 3, "max_pages": 40},
-    
+    {"name": "City of Johannesburg", "seed_url": "https://www.joburg.org.za/work_/TendersQuotations/Pages/Tenders.aspx", "max_depth": 2, "max_pages": 30},
+    {"name": "City of Tshwane", "seed_url": "https://www.tshwane.gov.za/?page_id=2194", "max_depth": 2, "max_pages": 30},
+    {"name": "City of Ekurhuleni", "seed_url": "https://www.ekurhuleni.gov.za/tenders", "max_depth": 3, "max_pages": 50},
+    {"name": "Sedibeng District", "seed_url": "https://www.sedibeng.gov.za/tenders", "max_depth": 2, "max_pages": 30},
+    {"name": "West Rand District", "seed_url": "https://www.westranddm.gov.za/tenders", "max_depth": 2, "max_pages": 30},
+
     # =========================================================================
-    # NORTHERN CAPE — Working sites only
+    # WESTERN CAPE (Metro + key municipalities + district)
     # =========================================================================
-    {"name": "Northern Cape Provincial Government", "seed_url": "https://www.ncgov.co.za/tenders",         "max_depth": 3, "max_pages": 40},
-    {"name": "Northern Cape DEDAT",    "seed_url": "http://www.northern-cape.gov.za/dedat/index.php?option=com_phocadownload&view=category&id=14&Itemid=824", "max_depth": 1, "max_pages": 20},
-    {"name": "Sol Plaatje Municipality", "seed_url": "https://www.solplaatje.org.za/tenders",              "max_depth": 2, "max_pages": 20},
-    {"name": "Richtersveld Municipality", "seed_url": "https://www.richtersveld.gov.za/tenders",           "max_depth": 2, "max_pages": 15},
-    {"name": "Hantam Municipality",     "seed_url": "https://www.hantam.gov.za/tenders",                   "max_depth": 2, "max_pages": 15},
-    {"name": "Karoo Hoogland Municipality", "seed_url": "https://www.karoohoogland.gov.za/tenders",        "max_depth": 2, "max_pages": 15},
-    {"name": "Siyathemba Municipality", "seed_url": "https://www.siyathemba.gov.za/index.php/tenders-quotations/tenders", "max_depth": 2, "max_pages": 20},
-    {"name": "Gamagara Municipality",   "seed_url": "https://www.gamagara.gov.za/tenders",                 "max_depth": 2, "max_pages": 15},
-    
+    {"name": "City of Cape Town", "seed_url": "https://web1.capetown.gov.za/web1/procurementportal/", "max_depth": 2, "max_pages": 30},
+    {"name": "Stellenbosch Municipality", "seed_url": "https://www.stellenbosch.gov.za/tenders", "max_depth": 2, "max_pages": 30},
+    {"name": "Drakenstein Municipality", "seed_url": "https://www.drakenstein.gov.za/tenders", "max_depth": 2, "max_pages": 30},
+    {"name": "George Municipality", "seed_url": "https://www.george.gov.za/tenders", "max_depth": 2, "max_pages": 30},
+    {"name": "Garden Route District", "seed_url": "https://www.gardenroute.gov.za/tenders", "max_depth": 2, "max_pages": 30},
+    {"name": "Cape Winelands District", "seed_url": "https://www.capewinelands.gov.za/tenders", "max_depth": 2, "max_pages": 30},
+    {"name": "Overberg District", "seed_url": "https://www.odm.org.za/tenders", "max_depth": 2, "max_pages": 30},
+    {"name": "West Coast District", "seed_url": "https://www.westcoastdm.co.za/tenders", "max_depth": 2, "max_pages": 30},
+
     # =========================================================================
-    # AGGREGATORS — Nationwide coverage
+    # KWAZULU-NATAL (Metro + key municipalities + districts)
     # =========================================================================
-    {"name": "Municipalities.co.za (Northern Cape)", "seed_url": "https://municipalities.co.za/tenders/index/7/northern-cape", "max_depth": 2, "max_pages": 30},
-    {"name": "eTenders Portal (National)", "seed_url": "https://www.etenders.gov.za",                       "max_depth": 2, "max_pages": 40},
-    {"name": "EasyTenders (Northern Cape)", "seed_url": "https://easytenders.co.za/tenders-in/northern-cape", "max_depth": 2, "max_pages": 30},
-    {"name": "OnlineTenders (Northern Cape)", "seed_url": "https://www.onlinetenders.co.za/tenders/northern-cape", "max_depth": 2, "max_pages": 30},
-    {"name": "TenderAlerts",             "seed_url": "https://tenderalerts.co.za",                          "max_depth": 2, "max_pages": 30},
-    
-    # NOTE: These sites have issues and are disabled for now:
-    # - City of Tshwane: Timeout issues
-    # - eThekwini Municipality: URL may have changed
-    # - Mangaung Municipality: URL may have changed
-    # - sa-tenders.co.za: Timeout issues
-    # - tendersbulletins.co.za: DNS failure
-    # - Many Northern Cape municipalities: DNS failures (domains don't exist)
+    {"name": "eThekwini Municipality", "seed_url": "https://www.durban.gov.za/pages/government/procurement", "max_depth": 3, "max_pages": 40},
+    {"name": "Msunduzi Municipality", "seed_url": "https://www.msunduzi.gov.za/tenders", "max_depth": 2, "max_pages": 30},
+    {"name": "Newcastle Municipality", "seed_url": "https://www.newcastle.gov.za/tenders", "max_depth": 2, "max_pages": 30},
+    {"name": "Umgungundlovu District", "seed_url": "https://www.umdm.gov.za/tenders", "max_depth": 2, "max_pages": 30},
+    {"name": "King Cetshwayo District", "seed_url": "https://www.kingcetshwayo.gov.za/tenders", "max_depth": 2, "max_pages": 30},
+    {"name": "Ugu District", "seed_url": "https://www.ugu.gov.za/tenders", "max_depth": 2, "max_pages": 30},
+    {"name": "Zululand District", "seed_url": "https://www.zululand.org.za/tenders", "max_depth": 2, "max_pages": 30},
+    {"name": "Harry Gwala District", "seed_url": "https://www.harrygwaladm.gov.za/tenders", "max_depth": 2, "max_pages": 30},
+
+    # =========================================================================
+    # EASTERN CAPE (2 metros + key districts)
+    # =========================================================================
+    {"name": "Buffalo City Metro", "seed_url": "https://www.buffalocity.gov.za/tenders", "max_depth": 3, "max_pages": 40},
+    {"name": "Nelson Mandela Bay", "seed_url": "https://www.nelsonmandelabay.gov.za/tenders", "max_depth": 3, "max_pages": 40},
+    {"name": "Sarah Baartman District", "seed_url": "https://www.sarahbaartman.gov.za/tenders", "max_depth": 2, "max_pages": 30},
+    {"name": "Chris Hani District", "seed_url": "https://www.chrishanidm.gov.za/tenders", "max_depth": 2, "max_pages": 30},
+    {"name": "Joe Gqabi District", "seed_url": "https://www.jgdm.gov.za/tenders", "max_depth": 2, "max_pages": 30},
+    {"name": "O.R. Tambo District", "seed_url": "https://www.ortambodm.gov.za/tenders", "max_depth": 2, "max_pages": 30},
+    {"name": "Alfred Nzo District", "seed_url": "https://www.andm.gov.za/tenders", "max_depth": 2, "max_pages": 30},
+    {"name": "Amathole District", "seed_url": "https://www.amathole.gov.za/tenders", "max_depth": 2, "max_pages": 30},
+
+    # =========================================================================
+    # FREE STATE (Metro + all districts)
+    # =========================================================================
+    {"name": "Mangaung Municipality", "seed_url": "https://www.mangaung.co.za/category/tenders-bids/", "max_depth": 2, "max_pages": 30},
+    {"name": "Fezile Dabi District", "seed_url": "https://www.feziledabi.gov.za/tenders", "max_depth": 2, "max_pages": 30},
+    {"name": "Lejweleputswa District", "seed_url": "https://www.lejweleputswa.gov.za/tenders", "max_depth": 2, "max_pages": 30},
+    {"name": "Thabo Mofutsanyana District", "seed_url": "https://www.thabomofutsanyana.gov.za/tenders", "max_depth": 2, "max_pages": 30},
+    {"name": "Xhariep District", "seed_url": "https://www.xhariep.gov.za/tenders", "max_depth": 2, "max_pages": 30},
+
+    # =========================================================================
+    # LIMPOPO (Capital + all districts)
+    # =========================================================================
+    {"name": "Polokwane Municipality", "seed_url": "https://www.polokwane.gov.za/index.php/tenders", "max_depth": 2, "max_pages": 30},
+    {"name": "Capricorn District", "seed_url": "https://www.cdm.org.za/tenders", "max_depth": 2, "max_pages": 30},
+    {"name": "Vhembe District", "seed_url": "https://www.vhembe.gov.za/tenders", "max_depth": 2, "max_pages": 30},
+    {"name": "Mopani District", "seed_url": "https://www.mopani.gov.za/tenders", "max_depth": 2, "max_pages": 30},
+    {"name": "Waterberg District", "seed_url": "https://www.waterberg.gov.za/tenders", "max_depth": 2, "max_pages": 30},
+    {"name": "Sekhukhune District", "seed_url": "https://www.sekhukhunedistrict.gov.za/tenders", "max_depth": 2, "max_pages": 30},
+
+    # =========================================================================
+    # MPUMALANGA (Capital + all districts)
+    # =========================================================================
+    {"name": "Mbombela Municipality", "seed_url": "https://www.mbombela.gov.za/tenders", "max_depth": 2, "max_pages": 30},
+    {"name": "Ehlanzeni District", "seed_url": "https://www.ehlanzeni.gov.za/tenders", "max_depth": 2, "max_pages": 30},
+    {"name": "Gert Sibande District", "seed_url": "https://www.gertsibande.gov.za/tenders", "max_depth": 2, "max_pages": 30},
+    {"name": "Nkangala District", "seed_url": "https://www.nkangaladm.gov.za/tenders", "max_depth": 2, "max_pages": 30},
+    {"name": "Steve Tshwete Municipality", "seed_url": "https://www.stevetshwetelm.gov.za/tenders", "max_depth": 2, "max_pages": 30},
+    {"name": "Govan Mbeki Municipality", "seed_url": "https://www.govanmbeki.gov.za/tenders", "max_depth": 2, "max_pages": 30},
+
+    # =========================================================================
+    # NORTH WEST (Capital + all districts)
+    # =========================================================================
+    {"name": "Mahikeng Municipality", "seed_url": "https://www.mahikeng.gov.za/tenders", "max_depth": 2, "max_pages": 30},
+    {"name": "Rustenburg Municipality", "seed_url": "https://www.rustenburg.gov.za/tenders", "max_depth": 2, "max_pages": 30},
+    {"name": "Bojanala District", "seed_url": "https://www.bojanala.gov.za/tenders", "max_depth": 2, "max_pages": 30},
+    {"name": "Dr Kenneth Kaunda District", "seed_url": "https://www.kaundadistrict.gov.za/tenders", "max_depth": 2, "max_pages": 30},
+    {"name": "Ngaka Modiri Molema District", "seed_url": "https://www.nmmdm.gov.za/tenders", "max_depth": 2, "max_pages": 30},
+    {"name": "Dr Ruth Segomotsi Mompati District", "seed_url": "https://www.ruthsegomotsimompati.gov.za/tenders", "max_depth": 2, "max_pages": 30},
+
+    # =========================================================================
+    # NORTHERN CAPE (Provincial + key municipalities)
+    # =========================================================================
+    {"name": "Northern Cape Provincial Government", "seed_url": "https://www.ncgov.co.za/tenders", "max_depth": 3, "max_pages": 40},
+    {"name": "Northern Cape DEDAT", "seed_url": "http://www.northern-cape.gov.za/dedat/index.php?option=com_phocadownload&view=category&id=14&Itemid=824", "max_depth": 1, "max_pages": 20},
+    {"name": "Sol Plaatje Municipality", "seed_url": "https://www.solplaatje.org.za/tenders", "max_depth": 2, "max_pages": 20},
+    {"name": "Frances Baard District", "seed_url": "https://francesbaard.gov.za/tenders/", "max_depth": 2, "max_pages": 20},
+    {"name": "ZF Mgcawu District", "seed_url": "https://www.zfm-dm.gov.za/documents/?dir=4302", "max_depth": 1, "max_pages": 20},
+    {"name": "Namakwa District", "seed_url": "https://www.namakwa-dm.gov.za/request-for-tenders/", "max_depth": 2, "max_pages": 20},
+    {"name": "Pixley ka Seme District", "seed_url": "https://www.pksdm.gov.za/tenders.html", "max_depth": 2, "max_pages": 20},
+    {"name": "John Taolo Gaetsewe District", "seed_url": "https://taologaetsewe.gov.za/request-for-quotations/", "max_depth": 2, "max_pages": 20},
+
+    # =========================================================================
+    # AGGREGATORS — Nationwide coverage (scrape ALL provinces)
+    # =========================================================================
+    {"name": "eTenders Portal (National)", "seed_url": "https://www.etenders.gov.za", "max_depth": 2, "max_pages": 40},
+    {"name": "Municipalities.co.za", "seed_url": "https://municipalities.co.za/tenders", "max_depth": 2, "max_pages": 40},
 ]
 
 
