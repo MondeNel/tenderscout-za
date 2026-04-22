@@ -1,34 +1,275 @@
+/**
+ * File: src/index.css
+ * Purpose: Global Styles and Tailwind Configuration
+ * 
+ * This file serves as the main stylesheet entry point for the application.
+ * It handles:
+ *   - Importing Google Fonts (Inter typeface)
+ *   - Importing Tailwind CSS layers (base, components, utilities)
+ *   - Defining custom base styles for body and elements
+ *   - Creating reusable component classes using Tailwind's @apply directive
+ * 
+ * The design system uses a consistent color palette with brand-400 as the
+ * primary accent color (a fresh green/teal shade: #1D9E75).
+ */
+
+/* =============================================================================
+   GOOGLE FONTS - INTER
+   =============================================================================
+   Inter is a modern, highly legible sans-serif typeface designed for screens.
+   We load weights 400 (regular), 500 (medium), and 600 (semibold).
+   These provide enough variation for body text, headings, and UI elements
+   without bloating the font download size.
+*/
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
+
+/* =============================================================================
+   TAILWIND CSS DIRECTIVES
+   =============================================================================
+   These directives inject Tailwind's utility classes into the final CSS bundle.
+   
+   Order matters:
+     1. @tailwind base    - CSS reset and base element styles
+     2. @tailwind components - Reusable component classes (like .container)
+     3. @tailwind utilities  - All utility classes (flex, p-4, text-lg, etc.)
+*/
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* =============================================================================
+   BASE LAYER - Global Element Styles
+   =============================================================================
+   The @layer base directive allows us to add custom base styles that integrate
+   with Tailwind's built-in base styles. These will be included in the final
+   CSS after Tailwind's reset but before utilities.
+*/
 @layer base {
+  /**
+   * Body Styles
+   * 
+   * - bg-gray-50: Light gray background for the entire app (Tailwind gray-50)
+   * - text-gray-900: Dark text for high contrast readability
+   * - antialiased: Smooths font rendering on macOS and improves legibility
+   */
   body {
     @apply bg-gray-50 text-gray-900 antialiased;
   }
+  
+  /**
+   * Universal Border Color
+   * 
+   * Sets a default border color for all elements with borders.
+   * Tailwind gray-200 is a subtle, neutral gray that works well
+   * for dividers, input borders, and card boundaries.
+   */
   * {
     @apply border-gray-200;
   }
 }
 
+/* =============================================================================
+   COMPONENTS LAYER - Reusable UI Component Classes
+   =============================================================================
+   The @layer components directive is where we define custom component classes
+   that combine multiple Tailwind utilities. These can be used throughout
+   the application to maintain consistent styling.
+   
+   Brand Color Palette (Green/Teal):
+     - brand-50:  #E1F5EE (Very light mint)
+     - brand-100: #9FE1CB (Light mint)
+     - brand-200: #5DCAA5 (Soft teal)
+     - brand-400: #1D9E75 (Primary brand green) ← Main accent
+     - brand-600: #0F6E56 (Darker green for hover)
+     - brand-800: #085041 (Deep green)
+     - brand-900: #04342C (Darkest green)
+   
+   Usage example:
+     <button className="btn-primary">Submit</button>
+     <input className="input" type="text" placeholder="Search..." />
+*/
 @layer components {
+  
+  /**
+   * Primary Button
+   * 
+   * Used for main actions: Submit, Save, Search, etc.
+   * 
+   * Features:
+   *   - Brand green background (brand-400: #1D9E75)
+   *   - Darker green hover state (brand-600: #0F6E56)
+   *   - Smooth color transition
+   *   - Disabled state with reduced opacity
+   */
   .btn-primary {
-    @apply bg-brand-400 hover:bg-brand-600 text-white font-medium px-4 py-2 rounded-lg text-sm transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed;
+    @apply bg-brand-400          /* Primary brand green (#1D9E75) */
+           hover:bg-brand-600    /* Darker green on hover (#0F6E56) */
+           text-white            /* White text for contrast */
+           font-medium           /* Semibold weight for emphasis */
+           px-4 py-2             /* Horizontal and vertical padding */
+           rounded-lg            /* Large rounded corners */
+           text-sm               /* Slightly smaller than body text */
+           transition-colors     /* Smooth color change on hover */
+           duration-150          /* 150ms transition speed */
+           disabled:opacity-50   /* Faded appearance when disabled */
+           disabled:cursor-not-allowed; /* Show "not allowed" cursor */
   }
+  
+  /**
+   * Secondary Button
+   * 
+   * Used for less important actions: Cancel, Back, Reset, etc.
+   * 
+   * Features:
+   *   - White background with subtle hover
+   *   - Gray border for definition
+   *   - Dark text for readability
+   */
   .btn-secondary {
-    @apply bg-white hover:bg-gray-50 text-gray-700 font-medium px-4 py-2 rounded-lg text-sm border border-gray-200 transition-colors duration-150;
+    @apply bg-white              /* Clean white background */
+           hover:bg-gray-50      /* Subtle gray on hover */
+           text-gray-700         /* Dark gray text (not pure black) */
+           font-medium           /* Semibold weight */
+           px-4 py-2             /* Consistent padding with primary */
+           rounded-lg            /* Rounded corners */
+           text-sm               /* Consistent text size */
+           border                /* Visible border */
+           border-gray-200       /* Light gray border */
+           transition-colors     /* Smooth transitions */
+           duration-150;         /* 150ms speed */
   }
+  
+  /**
+   * Ghost Button
+   * 
+   * Minimal button for tertiary actions or icon-only buttons.
+   * No border, subtle background on hover.
+   */
   .btn-ghost {
-    @apply hover:bg-gray-100 text-gray-600 font-medium px-3 py-2 rounded-lg text-sm transition-colors duration-150;
+    @apply hover:bg-gray-100     /* Light gray background on hover */
+           text-gray-600         /* Medium gray text */
+           font-medium           /* Semibold weight */
+           px-3 py-2             /* Slightly smaller padding */
+           rounded-lg            /* Rounded corners */
+           text-sm               /* Consistent text size */
+           transition-colors     /* Smooth transitions */
+           duration-150;         /* 150ms speed */
   }
+  
+  /**
+   * Input Field
+   * 
+   * Standard form input styling for text, email, password, etc.
+   * 
+   * Features:
+   *   - Full width by default
+   *   - Light border that highlights on focus
+   *   - Brand-colored focus ring for accessibility
+   *   - White background for contrast
+   */
   .input {
-    @apply w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent bg-white placeholder-gray-400;
+    @apply w-full                /* Take full width of container */
+           px-3 py-2             /* Comfortable padding for typing */
+           border                /* Visible boundary */
+           border-gray-200       /* Light gray border */
+           rounded-lg            /* Rounded corners */
+           text-sm               /* Readable text size */
+           focus:outline-none    /* Remove default browser outline */
+           focus:ring-2          /* Add custom focus ring */
+           focus:ring-brand-400  /* Brand green focus ring (#1D9E75) */
+           focus:border-transparent /* Hide border when ring is visible */
+           bg-white              /* White background */
+           placeholder-gray-400; /* Subtle placeholder text */
   }
+  
+  /**
+   * Card Container
+   * 
+   * Standard card styling for grouping related content.
+   * Used for tender cards, stat cards, and content panels.
+   */
   .card {
-    @apply bg-white border border-gray-200 rounded-xl p-4;
+    @apply bg-white              /* Clean white background */
+           border                /* Subtle boundary */
+           border-gray-200       /* Light gray border */
+           rounded-xl            /* Extra large rounded corners */
+           p-4;                  /* Comfortable internal padding */
   }
+  
+  /**
+   * Badge / Tag
+   * 
+   * Small label for statuses, categories, or metadata.
+   * Designed to be used inline with text or icons.
+   * 
+   * Common badge variants (add these classes in addition to .badge):
+   *   - bg-green-100 text-green-800 (Active/Success)
+   *   - bg-yellow-100 text-yellow-800 (Pending/Warning)
+   *   - bg-red-100 text-red-800 (Expired/Error)
+   *   - bg-gray-100 text-gray-800 (Neutral/Default)
+   */
   .badge {
-    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium;
+    @apply inline-flex           /* Allows multiple badges to sit inline */
+           items-center          /* Vertically center content */
+           px-2 py-0.5           /* Compact padding */
+           rounded               /* Small rounded corners */
+           text-xs               /* Very small text */
+           font-medium;          /* Semibold for legibility */
+  }
+  
+  /**
+   * Badge Variants (Pre-built combinations)
+   * 
+   * Example usage:
+   *   <span className="badge badge-success">Active</span>
+   *   <span className="badge badge-warning">Closing Soon</span>
+   *   <span className="badge badge-error">Expired</span>
+   */
+  .badge-success {
+    @apply bg-green-100 text-green-800;
+  }
+  
+  .badge-warning {
+    @apply bg-yellow-100 text-yellow-800;
+  }
+  
+  .badge-error {
+    @apply bg-red-100 text-red-800;
+  }
+  
+  .badge-info {
+    @apply bg-brand-100 text-brand-800;
+  }
+  
+  .badge-neutral {
+    @apply bg-gray-100 text-gray-800;
+  }
+}
+
+/* =============================================================================
+   CUSTOM UTILITIES
+   =============================================================================
+   Add any project-specific utility classes here using the @layer utilities
+   directive. These will be included after all other Tailwind utilities.
+*/
+@layer utilities {
+  /**
+   * Hide scrollbar while maintaining scroll functionality
+   * Useful for horizontal scrolling containers
+   */
+  .scrollbar-hidden {
+    scrollbar-width: none;           /* Firefox */
+    -ms-overflow-style: none;        /* IE/Edge */
+  }
+  
+  .scrollbar-hidden::-webkit-scrollbar {
+    display: none;                   /* Chrome/Safari/Opera */
+  }
+  
+  /**
+   * Custom text gradient using brand colors
+   */
+  .text-gradient-brand {
+    @apply bg-gradient-to-r from-brand-400 to-brand-600 bg-clip-text text-transparent;
   }
 }
