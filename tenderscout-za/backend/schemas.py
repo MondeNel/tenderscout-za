@@ -16,6 +16,12 @@ class UserRegister(BaseModel):
     email: EmailStr
     full_name: str
     password: str
+    # NEW FIELDS
+    province: Optional[str] = None
+    town: Optional[str] = None
+    business_location: Optional[str] = None
+    business_lat: Optional[float] = None
+    business_lng: Optional[float] = None
 
 
 class UserLogin(BaseModel):
