@@ -130,11 +130,30 @@ function FallbackView({ tender, docUrl, pdfError, onDownload, isDirectDoc }) {
     ? tender.description
     : null
 
-  // Customize message based on error type
-  const title = pdfError ? 'Unable to load document' : 'Tender listing page'
-  const subtitle = pdfError
-    ? 'The document may require authentication or cannot be embedded directly.'
-    : 'This tender links to a listing page. Open it to find and download the tender documents.'
+  // Detect URL type for better messaging
+  const isHtmlDetailPage = docUrl && !isDirectDoc && !docUrl.match(/\.(pdf|doc|docx|zip)$/i)
+  const sourceSite = tender.source_site || 'the source website'
+
+  // Customize message based on what we know about the URL
+  let title, subtitle, showDownload
+
+  if (pdfError) {
+    title = 'Unable to load document'
+    subtitle = 'The document may require authentication or cannot be embedded directly. Try opening it in your browser.'
+    showDownload = true
+  } else if (isDirectDoc) {
+    title = 'Document available'
+    subtitle = `This tender links to a document. Open it directly or download a copy.`
+    showDownload = true
+  } else if (isHtmlDetailPage) {
+    title = 'Tender detail page'
+    subtitle = `This tender has a dedicated page on ${sourceSite}. Open it to view full details and download the tender documents.`
+    showDownload = false
+  } else {
+    title = 'Tender listing page'
+    subtitle = `This tender is listed on ${sourceSite}. Visit the page to find and download the tender documents.`
+    showDownload = false
+  }
 
   return (
     <div className="flex flex-col items-center justify-center h-full gap-6 p-8 text-center">
@@ -149,56 +168,26 @@ function FallbackView({ tender, docUrl, pdfError, onDownload, isDirectDoc }) {
 
       {/* Tender details card */}
       <div className="w-full max-w-md bg-white rounded-xl border border-gray-200 p-5 text-left space-y-3">
-        <DetailRow 
-          label="Title" 
-          value={tender.title} 
-          valueClass="text-sm text-gray-900 font-medium" 
-        />
-        <DetailRow 
-          label="Description" 
-          value={description} 
-          valueClass="text-sm text-gray-600" 
-        />
-        <DetailRow 
-          label="Issuing body" 
-          value={tender.issuing_body} 
-          valueClass="text-sm text-gray-600" 
-        />
-        <DetailRow 
-          label="Closing date" 
-          value={tender.closing_date} 
-          valueClass="text-sm text-red-500 font-medium" 
-        />
-        <DetailRow 
-          label="Reference" 
-          value={tender.reference_number} 
-          valueClass="text-sm text-gray-600 font-mono" 
-        />
-        <DetailRow 
-          label="Province" 
-          value={province} 
-          valueClass="text-sm text-gray-600" 
-        />
-        <DetailRow 
-          label="Municipality" 
-          value={tender.municipality} 
-          valueClass="text-sm text-gray-600" 
-        />
-        <DetailRow 
-          label="Town" 
-          value={tender.town} 
-          valueClass="text-sm text-gray-600" 
-        />
+        <DetailRow label="Title" value={tender.title} valueClass="text-sm text-gray-900 font-medium" />
+        <DetailRow label="Description" value={description} valueClass="text-sm text-gray-600" />
+        <DetailRow label="Issuing body" value={tender.issuing_body} valueClass="text-sm text-gray-600" />
+        <DetailRow label="Closing date" value={tender.closing_date} valueClass="text-sm text-red-500 font-medium" />
+        <DetailRow label="Reference" value={tender.reference_number} valueClass="text-sm text-gray-600 font-mono" />
+        <DetailRow label="Province" value={province} valueClass="text-sm text-gray-600" />
+        <DetailRow label="Municipality" value={tender.municipality} valueClass="text-sm text-gray-600" />
+        <DetailRow label="Town" value={tender.town} valueClass="text-sm text-gray-600" />
       </div>
 
       {/* Action buttons */}
       <div className="flex gap-3">
-        <button
-          onClick={onDownload}
-          className="flex items-center gap-2 px-4 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-sm font-medium transition-colors"
-        >
-          <Download size={15} /> Download
-        </button>
+        {showDownload && (
+          <button
+            onClick={onDownload}
+            className="flex items-center gap-2 px-4 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-sm font-medium transition-colors"
+          >
+            <Download size={15} /> Download
+          </button>
+        )}
         
         <a 
           href={docUrl} 
@@ -206,7 +195,7 @@ function FallbackView({ tender, docUrl, pdfError, onDownload, isDirectDoc }) {
           rel="noopener noreferrer" 
           className="flex items-center gap-2 px-4 py-2.5 bg-brand-400 hover:bg-brand-600 text-white rounded-lg text-sm font-medium transition-colors"
         >
-          <ExternalLink size={15} /> Open tender page
+          <ExternalLink size={15} /> {isHtmlDetailPage ? 'Open tender page' : 'Open in browser'}
         </a>
       </div>
     </div>

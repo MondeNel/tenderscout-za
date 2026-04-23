@@ -8,6 +8,7 @@
  *   - Red location pins for tenders
  *   - Driving route lines from user to tender locations
  *   - Route lines via OSRM (Open Source Routing Machine)
+ *   - Mobile responsive with validated coordinates
  */
 
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
@@ -76,6 +77,25 @@ const PROVINCE_CENTERS = {
 }
 
 // =============================================================================
+// HELPER: Validate coordinates before using
+// =============================================================================
+function isValidCoord(lat, lng) {
+  if (lat === undefined || lng === undefined) return false
+  const a = Number(lat), b = Number(lng)
+  if (isNaN(a) || isNaN(b)) return false
+  if (a === 0 && b === 0) return false
+  if (a < -90 || a > 90) return false
+  if (b < -180 || b > 180) return false
+  return true
+}
+
+function safeCenter(center) {
+  if (!center || !Array.isArray(center) || center.length !== 2) return SA_CENTER
+  const [lat, lng] = center.map(Number)
+  return isValidCoord(lat, lng) ? [lat, lng] : SA_CENTER
+}
+
+// =============================================================================
 // HELPER: District marker with tender count (RED theme)
 // =============================================================================
 function makeDistrictIcon(count, sel = false) {
@@ -98,17 +118,29 @@ function makeDistrictIcon(count, sel = false) {
 }
 
 // =============================================================================
-// HELPER: Map fly-to controller
+// HELPER: Map fly-to controller (SAFE — validates all coordinates)
 // =============================================================================
 function FlyCtrl({ target }) {
   const map = useMap()
   const prev = useRef(null)
+  
   useEffect(() => {
-    if (target && target.key !== prev.current) {
+    if (!target || !target.c) return
+    if (!Array.isArray(target.c) || target.c.length !== 2) return
+    
+    const [lat, lng] = target.c.map(Number)
+    if (!isValidCoord(lat, lng)) return
+    
+    if (target.key !== prev.current) {
       prev.current = target.key
-      map.flyTo(target.c, target.z, { duration: 0.85 })
+      try {
+        map.flyTo([lat, lng], target.z || 6, { duration: 0.85 })
+      } catch (e) {
+        console.warn('FlyTo failed:', e)
+      }
     }
-  }, [target?.key])
+  }, [target?.key, target?.c, target?.z, map])
+  
   return null
 }
 
@@ -175,16 +207,10 @@ function TenderDetailView({ tender, onClose }) {
           <DetailRow label="Source" value={tender.source_site} />
         </div>
         {tender.description && (
-          <div className="mt-4">
-            <p className="text-xs text-gray-400 uppercase tracking-wide mb-2">Description</p>
-            <p className="text-sm text-gray-600 whitespace-pre-line">{tender.description}</p>
-          </div>
+          <div className="mt-4"><p className="text-xs text-gray-400 uppercase tracking-wide mb-2">Description</p><p className="text-sm text-gray-600 whitespace-pre-line">{tender.description}</p></div>
         )}
         {tender.contact_info && (
-          <div className="mt-4">
-            <p className="text-xs text-gray-400 uppercase tracking-wide mb-2">Contact Information</p>
-            <p className="text-sm text-gray-600">{tender.contact_info}</p>
-          </div>
+          <div className="mt-4"><p className="text-xs text-gray-400 uppercase tracking-wide mb-2">Contact Information</p><p className="text-sm text-gray-600">{tender.contact_info}</p></div>
         )}
       </div>
     </div>
@@ -197,31 +223,28 @@ function TenderDetailView({ tender, onClose }) {
 export default function Search() {
   const { user, refreshUser, lastSearch, saveLastSearch } = useAuth()
 
-  // FILTER STATE
   const [keyword, setKeyword] = useState(lastSearch?.keyword || '')
   const [selInd, setSelInd] = useState(lastSearch?.industries || user?.industry_preferences || [])
   const [selProv, setSelProv] = useState(lastSearch?.provinces || user?.province_preferences || [])
   const [selMunis, setSelMunis] = useState(lastSearch?.municipalities || [])
   const [showMunis, setShowMunis] = useState(false)
 
-  // LOCATION STATE
   const [useMyLoc, setUseMyLoc] = useState(false)
   const [radiusKm, setRadiusKm] = useState(user?.search_radius_km || 100)
   const userLoc = useMemo(() => {
-    if (!user?.business_lat) return null
-    return { lat: user.business_lat, lng: user.business_lng, name: user.business_location || 'My location' }
+    if (!user?.business_lat || !user?.business_lng) return null
+    if (!isValidCoord(user.business_lat, user.business_lng)) return null
+    return { lat: Number(user.business_lat), lng: Number(user.business_lng), name: user.business_location || 'My location' }
   }, [user])
 
-  // MAP STATE
   const [showMap, setShowMap] = useState(true)
   const [flyTarget, setFlyTarget] = useState(null)
   const [mapData, setMapData] = useState({ districts: [], total: 0 })
   const [mapLoading, setMapLoading] = useState(false)
   const [activePop, setActivePop] = useState(null)
   const [selectedTender, setSelectedTender] = useState(null)
-  const [routes, setRoutes] = useState([])  // ← ROUTE STATE
+  const [routes, setRoutes] = useState([])
 
-  // RESULTS STATE
   const [results, setResults] = useState([])
   const [total, setTotal] = useState(0)
   const [charged, setCharged] = useState(0)
@@ -229,29 +252,37 @@ export default function Search() {
   const [searched, setSearched] = useState(false)
   const [page, setPage] = useState(1)
 
-  // UI STATE
   const [showFilters, setShowFilters] = useState(true)
   const [mobileTab, setMobileTab] = useState('filters')
 
   const initialLoadDone = useRef(false)
 
-  const tog = (list, set, v) =>
-    set(list.includes(v) ? list.filter(x => x !== v) : [...list, v])
-
+  const tog = (list, set, v) => set(list.includes(v) ? list.filter(x => x !== v) : [...list, v])
   const filterCount = selInd.length + selProv.length + selMunis.length + (useMyLoc && userLoc ? 1 : 0)
 
   // ===========================================================================
-  // MAP CENTER - Based on user's saved location
+  // SAFE FLY TARGET SETTER — Validates coordinates before setting
+  // ===========================================================================
+  const setSafeFlyTarget = (center, zoom, key) => {
+    const safe = safeCenter(center)
+    setFlyTarget({ c: safe, z: zoom, key })
+  }
+
+  // ===========================================================================
+  // MAP CENTER — Always returns valid coordinates
   // ===========================================================================
   const mapCenter = useMemo(() => {
-    if (user?.business_lat && user?.business_lng) return [user.business_lat, user.business_lng]
+    if (user?.business_lat && user?.business_lng) {
+      const c = safeCenter([user.business_lat, user.business_lng])
+      if (c !== SA_CENTER) return c
+    }
     const up = user?.province_preferences?.[0] || selProv[0]
-    if (up && PROVINCE_CENTERS[up]) return PROVINCE_CENTERS[up]
+    if (up && PROVINCE_CENTERS[up]) return safeCenter(PROVINCE_CENTERS[up])
     return SA_CENTER
   }, [user, selProv])
 
   const mapZoom = useMemo(() => {
-    if (user?.business_lat && user?.business_lng) return TOWN_ZOOM
+    if (user?.business_lat && user?.business_lng && safeCenter([user.business_lat, user.business_lng]) !== SA_CENTER) return TOWN_ZOOM
     if ((user?.province_preferences?.[0] || selProv[0]) && PROVINCE_CENTERS[user?.province_preferences?.[0] || selProv[0]]) return PROV_ZOOM
     return SA_ZOOM
   }, [user, selProv])
@@ -260,8 +291,8 @@ export default function Search() {
     const adding = !selProv.includes(prov)
     setSelProv(prev => adding ? [...prev, prov] : prev.filter(v => v !== prov))
     const c = PROVINCE_CENTERS[prov]
-    if (adding && c) setFlyTarget({ c, z: PROV_ZOOM, key: prov + Date.now() })
-    else setFlyTarget({ c: SA_CENTER, z: SA_ZOOM, key: 'sa' + Date.now() })
+    if (adding && c) setSafeFlyTarget(c, PROV_ZOOM, prov + Date.now())
+    else setSafeFlyTarget(SA_CENTER, SA_ZOOM, 'sa' + Date.now())
   }
 
   const fetchMapData = useCallback(async () => {
@@ -282,33 +313,27 @@ export default function Search() {
               const k = `${prov}::${dist}`
               if (!dm[k]) dm[k] = { key: k, province: prov, district: dist, lat: dD.lat, lng: dD.lng, municipalities: dD.municipalities, tenders: [] }
               dm[k].tenders.push(t)
-              placed = true
-              break
+              placed = true; break
             }
           }
           if (placed) break
         }
         if (!placed && t.province && SA_LOCATIONS[t.province]) {
-          const pD = SA_LOCATIONS[t.province]
-          const fd = Object.keys(pD.districts)[0]
-          const dD = pD.districts[fd]
+          const pD = SA_LOCATIONS[t.province]; const fd = Object.keys(pD.districts)[0]; const dD = pD.districts[fd]
           const k = `${t.province}::${fd}`
           if (!dm[k]) dm[k] = { key: k, province: t.province, district: fd, lat: dD.lat, lng: dD.lng, municipalities: dD.municipalities, tenders: [] }
           dm[k].tenders.push(t)
         }
       }
       setMapData({ districts: Object.values(dm), total: res.data.total })
-    } catch (e) {
-      console.warn('Map fetch error:', e)
-    } finally {
-      setMapLoading(false)
-    }
+    } catch (e) { console.warn('Map fetch error:', e) }
+    finally { setMapLoading(false) }
   }, [JSON.stringify(selInd), JSON.stringify(selProv)])
 
   useEffect(() => { fetchMapData() }, [fetchMapData])
 
   // ===========================================================================
-  // INITIAL LOAD - Auto-zoom to user's province
+  // INITIAL LOAD
   // ===========================================================================
   useEffect(() => {
     if (!user || initialLoadDone.current) return
@@ -316,56 +341,41 @@ export default function Search() {
     const indPref = user.industry_preferences || []
     const provPref = user.province_preferences || []
     if (provPref.length > 0 && PROVINCE_CENTERS[provPref[0]]) {
-      setFlyTarget({ c: PROVINCE_CENTERS[provPref[0]], z: PROV_ZOOM, key: 'user-prov' + Date.now() })
-    } else if (user?.business_lat && user?.business_lng) {
-      setFlyTarget({ c: [user.business_lat, user.business_lng], z: TOWN_ZOOM, key: 'user-town' + Date.now() })
+      setSafeFlyTarget(PROVINCE_CENTERS[provPref[0]], PROV_ZOOM, 'user-prov' + Date.now())
+    } else if (user?.business_lat && user?.business_lng && isValidCoord(user.business_lat, user.business_lng)) {
+      setSafeFlyTarget([user.business_lat, user.business_lng], TOWN_ZOOM, 'user-town' + Date.now())
     }
     doSearch(1, indPref, provPref, [], '')
   }, [user?.id])
 
   // ===========================================================================
-  // ROUTE FETCHING — Get driving directions from user to tender locations
+  // ROUTE FETCHING
   // ===========================================================================
   useEffect(() => {
-    if (!user?.business_lat || !user?.business_lng || results.length === 0) {
-      setRoutes([])
-      return
+    if (!user?.business_lat || !user?.business_lng || !isValidCoord(user.business_lat, user.business_lng) || results.length === 0) {
+      setRoutes([]); return
     }
-    
     let cancelled = false
-    
     const fetchRoutes = async () => {
       const routeLines = []
-      
-      // Get unique tender locations (max 5)
       const uniqueLocations = new Map()
       for (const tender of results.slice(0, 10)) {
         const coords = getTenderCoordinates(tender)
-        if (coords) {
+        if (coords && isValidCoord(coords.lat, coords.lng)) {
           const key = `${coords.lat.toFixed(4)},${coords.lng.toFixed(4)}`
-          if (!uniqueLocations.has(key)) {
-            uniqueLocations.set(key, coords)
-          }
+          if (!uniqueLocations.has(key)) uniqueLocations.set(key, coords)
         }
       }
-      
       const locations = [...uniqueLocations.values()].slice(0, 5)
-      
       for (const loc of locations) {
         if (cancelled) break
-        const route = await getRoute(user.business_lat, user.business_lng, loc.lat, loc.lng)
+        const route = await getRoute(Number(user.business_lat), Number(user.business_lng), loc.lat, loc.lng)
         if (route && !cancelled) {
-          routeLines.push({
-            positions: route,
-            name: loc.name,
-            color: `hsl(${Math.floor(Math.random() * 30 + 5)}, 65%, 48%)`, // Red/orange tones
-          })
+          routeLines.push({ positions: route, name: loc.name, color: `hsl(${Math.floor(Math.random() * 30 + 5)}, 65%, 48%)` })
         }
       }
-      
       if (!cancelled) setRoutes(routeLines)
     }
-    
     fetchRoutes()
     return () => { cancelled = true }
   }, [results, user])
@@ -379,46 +389,27 @@ export default function Search() {
       const payload = { industries, provinces, municipalities: munis, keyword: kw || undefined, page: p, page_size: 20 }
       if (useMyLoc && userLoc) { payload.user_lat = userLoc.lat; payload.user_lng = userLoc.lng; payload.radius_km = radiusKm }
       const res = await searchTenders(payload)
-      setResults(res.data.results)
-      setTotal(res.data.total)
-      setCharged(res.data.credits_charged || 0)
-      setPage(p)
-      setSearched(true)
+      setResults(res.data.results); setTotal(res.data.total); setCharged(res.data.credits_charged || 0); setPage(p); setSearched(true)
       await refreshUser()
       saveLastSearch({ industries, provinces, municipalities: munis, keyword: kw })
-      if (res.data.results.length === 0 && (industries.length || provinces.length || munis.length || kw)) {
-        toast('No tenders found — try broader filters', { icon: '🔍' })
-      } else if (res.data.results.length > 0 && p === 1) {
-        toast.success(`${res.data.total} tenders found`)
-        setMobileTab('results')
-      }
+      if (res.data.results.length === 0 && (industries.length || provinces.length || munis.length || kw)) toast('No tenders found — try broader filters', { icon: '🔍' })
+      else if (res.data.results.length > 0 && p === 1) { toast.success(`${res.data.total} tenders found`); setMobileTab('results') }
     } catch (err) {
       if (err.response?.status === 402) toast.error('Not enough credits — please top up')
       else toast.error(err.response?.data?.detail || 'Search failed')
-    } finally {
-      setLoading(false)
-    }
+    } finally { setLoading(false) }
   }
 
   const handleSearch = () => doSearch(1)
   const clearFilters = () => {
     setKeyword(''); setSelInd([]); setSelProv([]); setSelMunis([])
-    setUseMyLoc(false)
-    setRoutes([])
-    setFlyTarget({ c: SA_CENTER, z: SA_ZOOM, key: 'clear' + Date.now() })
+    setUseMyLoc(false); setRoutes([])
+    setSafeFlyTarget(SA_CENTER, SA_ZOOM, 'clear' + Date.now())
     doSearch(1, [], [], [], '')
   }
 
-  const muniList = useMemo(() =>
-    selProv.length ? selProv.flatMap(p => getMunicipalities(p)) : getMunicipalities()
-  , [selProv])
-
-  const visibleDistricts = useMemo(() =>
-    mapData.districts.filter(d =>
-      (selProv.length ? selProv.includes(d.province) : true) && d.tenders.length > 0
-    )
-  , [mapData, selProv])
-
+  const muniList = useMemo(() => selProv.length ? selProv.flatMap(p => getMunicipalities(p)) : getMunicipalities(), [selProv])
+  const visibleDistricts = useMemo(() => mapData.districts.filter(d => (selProv.length ? selProv.includes(d.province) : true) && d.tenders.length > 0), [mapData, selProv])
   const groupedLocations = useMemo(() => groupTendersByLocation(results), [results])
 
   // ===========================================================================
@@ -426,7 +417,6 @@ export default function Search() {
   // ===========================================================================
   const TheMap = ({ scrollWheel = true }) => (
     <div className="relative w-full h-full">
-      {/* Stats bar */}
       <div className="absolute top-3 left-3 z-10 pointer-events-none flex gap-2">
         <div className="bg-white rounded-full px-3 py-1.5 shadow border border-gray-200 flex items-center gap-1.5">
           <TrendingUp size={12} className="text-brand-400" />
@@ -434,160 +424,31 @@ export default function Search() {
           {mapLoading && <Loader size={11} className="animate-spin text-gray-300 ml-1" />}
         </div>
       </div>
-
-      <button onClick={() => setShowMap(false)} className="absolute top-3 right-3 z-10 bg-white rounded-full px-3 py-1.5 shadow border border-gray-200 flex items-center gap-1.5 text-xs text-gray-500 hover:text-brand-600">
-        <EyeOff size={11} /> Hide map
-      </button>
-
-      {/* Legend */}
+      <button onClick={() => setShowMap(false)} className="absolute top-3 right-3 z-10 bg-white rounded-full px-3 py-1.5 shadow border border-gray-200 flex items-center gap-1.5 text-xs text-gray-500 hover:text-brand-600"><EyeOff size={11} /> Hide map</button>
       <div className="absolute bottom-8 right-3 z-10 bg-white rounded-xl px-3 py-2 shadow border border-gray-200">
         <p className="text-xs text-gray-400 mb-1.5 font-medium">Tenders</p>
-        {[['#FEE2E2','1–5'],['#FCA5A5','6–20'],['#F87171','21–50'],['#EF4444','51–100'],['#DC2626','100+']].map(([c,l]) => (
-          <div key={l} className="flex items-center gap-1.5 mb-0.5">
-            <div className="w-3 h-3 rounded-full" style={{ background: c }} />
-            <span className="text-xs text-gray-500">{l}</span>
-          </div>
-        ))}
-        {routes.length > 0 && (
-          <>
-            <p className="text-xs text-gray-400 mt-2 mb-1">Routes</p>
-            <div className="flex items-center gap-1.5">
-              <div className="w-6 h-0.5 rounded" style={{ background: '#EF4444', opacity: 0.7, borderTop: '2px dashed #EF4444' }} />
-              <span className="text-xs text-gray-500">Driving directions</span>
-            </div>
-          </>
-        )}
+        {[['#FEE2E2','1–5'],['#FCA5A5','6–20'],['#F87171','21–50'],['#EF4444','51–100'],['#DC2626','100+']].map(([c,l]) => (<div key={l} className="flex items-center gap-1.5 mb-0.5"><div className="w-3 h-3 rounded-full" style={{ background: c }} /><span className="text-xs text-gray-500">{l}</span></div>))}
+        {routes.length > 0 && (<><p className="text-xs text-gray-400 mt-2 mb-1">Routes</p><div className="flex items-center gap-1.5"><div className="w-6 h-0.5 rounded" style={{ background: '#EF4444', opacity: 0.7, borderTop: '2px dashed #EF4444' }} /><span className="text-xs text-gray-500">Driving directions</span></div></>)}
       </div>
-
-      <MapContainer center={mapCenter} zoom={mapZoom} maxBounds={SA_BOUNDS} maxBoundsViscosity={1.0} minZoom={5} maxZoom={14}
-        style={{ height: '100%', width: '100%' }} scrollWheelZoom={scrollWheel}>
-        
-        {/* OSM HOT tiles — roads, towns, routes */}
+      <MapContainer center={mapCenter} zoom={mapZoom} maxBounds={SA_BOUNDS} maxBoundsViscosity={1.0} minZoom={5} maxZoom={14} style={{ height: '100%', width: '100%' }} scrollWheelZoom={scrollWheel}>
         <TileLayer attribution={MAP_ATTRIBUTION} url={MAP_TILE_URL} bounds={SA_BOUNDS} />
         <FlyCtrl target={flyTarget} />
-
-        {/* =================================================================
-            ROUTE LINES — Driving directions from user to tender locations
-            ================================================================= */}
-        {routes.map((route, index) => (
-          <Polyline
-            key={`route-${index}`}
-            positions={route.positions}
-            pathOptions={{
-              color: route.color,
-              weight: 3,
-              opacity: 0.7,
-              dashArray: '8 8',
-            }}
-          >
-            <Popup>
-              <p className="text-xs font-semibold">Route to {route.name}</p>
-              <p className="text-xs text-gray-500">Driving directions via OSRM</p>
-            </Popup>
-          </Polyline>
-        ))}
-
-        {/* User location marker */}
-        {user?.business_lat && user?.business_lng && (
-          <Marker position={[user.business_lat, user.business_lng]}
-            icon={L.divIcon({ 
-              className: '',
-              html: `<div style="
-                width: 18px; height: 18px;
-                background: #1D9E75;
-                border: 3px solid white;
-                border-radius: 50%;
-                box-shadow: 0 0 0 5px rgba(29, 158, 117, 0.3);
-              "></div>`,
-              iconSize: [18, 18], iconAnchor: [9, 9],
-            })}>
-            <Popup><strong>{user.business_location || 'Your location'}</strong></Popup>
-          </Marker>
-        )}
-
-        {useMyLoc && userLoc && (
-          <Circle center={[userLoc.lat, userLoc.lng]} radius={radiusKm * 1000}
-            pathOptions={{ color: '#1D9E75', fillColor: '#1D9E75', fillOpacity: .05, weight: 1.5, dashArray: '5 5' }} />
-        )}
-
-        {/* District Markers */}
-        {visibleDistricts.map(d => {
-          const count = d.tenders.length
-          const isSel = activePop === d.key
-          return (
-            <Marker key={d.key} position={[d.lat, d.lng]} icon={makeDistrictIcon(count, isSel)}
-              eventHandlers={{ click: () => setActivePop(d.key) }}>
-              <Popup onClose={() => setActivePop(null)} maxWidth={300} minWidth={250}>
-                <div>
-                  <div className="flex items-center justify-between mb-2 pb-2 border-b border-gray-100">
-                    <div><p className="text-sm font-semibold text-gray-900">{d.district}</p><p className="text-xs text-gray-400">{d.province}</p></div>
-                    <span className="px-2 py-0.5 bg-red-50 text-red-700 text-xs font-bold rounded-full border border-red-200">{count} tender{count !== 1 ? 's' : ''}</span>
-                  </div>
-                  <div className="space-y-1.5 max-h-52 overflow-y-auto">
-                    {d.tenders.slice(0, 5).map((t, i) => (
-                      <div key={i} className="flex items-start gap-2 p-2 bg-gray-50 rounded-lg">
-                        <div className="flex-1 min-w-0">
-                          <p className="text-xs font-medium text-gray-800 line-clamp-2">{t.title}</p>
-                          <div className="flex items-center gap-1 mt-0.5 flex-wrap">{t.issuing_body && <span className="text-xs text-gray-400 truncate max-w-[120px]">{t.issuing_body}</span>}{t.closing_date && <span className="text-xs text-red-500 flex-shrink-0">· {t.closing_date}</span>}</div>
-                        </div>
-                        {(t.document_url || t.source_url) && (
-                          <a href={t.document_url || t.source_url} target="_blank" rel="noopener noreferrer" className="flex-shrink-0 text-red-500 hover:text-red-700" onClick={e => e.stopPropagation()}><ExternalLink size={11} /></a>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                  <button onClick={() => { setSelMunis(d.municipalities.slice(0, 3)); if (!selProv.includes(d.province)) setSelProv(p => [...p, d.province]); doSearch(1, selInd, selProv.includes(d.province) ? selProv : [...selProv, d.province], d.municipalities.slice(0, 3), keyword) }}
-                    className="mt-2 w-full py-1.5 text-xs bg-red-500 hover:bg-red-600 text-white rounded-lg font-medium">Search all {count} tenders →</button>
-                  <p className="text-xs text-gray-400 mt-1.5">{d.municipalities.slice(0, 3).join(' · ')}{d.municipalities.length > 3 ? ` +${d.municipalities.length - 3}` : ''}</p>
-                </div>
-              </Popup>
-            </Marker>
-          )
-        })}
-
-        {/* Grouped Location Pins */}
-        {groupedLocations.map((group, index) => {
-          const iconConfig = createGroupedMarkerIcon(group.count, group.type)
-          return (
-            <Marker key={`group-${index}`} position={[group.lat, group.lng]} icon={L.divIcon(iconConfig)}>
-              <Popup maxWidth={300} minWidth={250}>
-                <div>
-                  <div className="flex items-center justify-between mb-2 pb-2 border-b border-gray-100">
-                    <div><p className="text-sm font-semibold text-gray-900">{group.name}</p><p className="text-xs text-gray-400 capitalize">{group.type}</p></div>
-                    <span className="px-2 py-0.5 bg-red-50 text-red-700 text-xs font-bold rounded-full border border-red-200">{group.count} tender{group.count !== 1 ? 's' : ''}</span>
-                  </div>
-                  <div className="space-y-1.5 max-h-52 overflow-y-auto">
-                    {group.tenders.slice(0, 5).map((t, i) => (
-                      <div key={i} className="flex items-start gap-2 p-2 bg-gray-50 rounded-lg">
-                        <div className="flex-1 min-w-0"><p className="text-xs font-medium text-gray-800 line-clamp-2">{t.title}</p><p className="text-xs text-gray-400 mt-0.5">{t.issuing_body}</p>{t.closing_date && <p className="text-xs text-red-500 mt-0.5">Closes {t.closing_date}</p>}</div>
-                      </div>
-                    ))}
-                  </div>
-                  {group.count > 5 && <p className="text-xs text-gray-400 mt-2 pt-2 border-t border-gray-100">+{group.count - 5} more tender{group.count - 5 !== 1 ? 's' : ''}</p>}
-                </div>
-              </Popup>
-            </Marker>
-          )
-        })}
+        {routes.map((route, index) => (<Polyline key={`route-${index}`} positions={route.positions} pathOptions={{ color: route.color, weight: 3, opacity: 0.7, dashArray: '8 8' }}><Popup><p className="text-xs font-semibold">Route to {route.name}</p><p className="text-xs text-gray-500">Driving directions via OSRM</p></Popup></Polyline>))}
+        {user?.business_lat && user?.business_lng && isValidCoord(user.business_lat, user.business_lng) && (<Marker position={[Number(user.business_lat), Number(user.business_lng)]} icon={L.divIcon({ className: '', html: `<div style="width: 18px; height: 18px; background: #1D9E75; border: 3px solid white; border-radius: 50%; box-shadow: 0 0 0 5px rgba(29, 158, 117, 0.3);"></div>`, iconSize: [18, 18], iconAnchor: [9, 9] })}><Popup><strong>{user.business_location || 'Your location'}</strong></Popup></Marker>)}
+        {useMyLoc && userLoc && (<Circle center={[userLoc.lat, userLoc.lng]} radius={radiusKm * 1000} pathOptions={{ color: '#1D9E75', fillColor: '#1D9E75', fillOpacity: .05, weight: 1.5, dashArray: '5 5' }} />)}
+        {visibleDistricts.map(d => { const count = d.tenders.length; const isSel = activePop === d.key; return (<Marker key={d.key} position={[d.lat, d.lng]} icon={makeDistrictIcon(count, isSel)} eventHandlers={{ click: () => setActivePop(d.key) }}><Popup onClose={() => setActivePop(null)} maxWidth={300} minWidth={250}><div><div className="flex items-center justify-between mb-2 pb-2 border-b border-gray-100"><div><p className="text-sm font-semibold text-gray-900">{d.district}</p><p className="text-xs text-gray-400">{d.province}</p></div><span className="px-2 py-0.5 bg-red-50 text-red-700 text-xs font-bold rounded-full border border-red-200">{count} tender{count !== 1 ? 's' : ''}</span></div><div className="space-y-1.5 max-h-52 overflow-y-auto">{d.tenders.slice(0, 5).map((t, i) => (<div key={i} className="flex items-start gap-2 p-2 bg-gray-50 rounded-lg"><div className="flex-1 min-w-0"><p className="text-xs font-medium text-gray-800 line-clamp-2">{t.title}</p><div className="flex items-center gap-1 mt-0.5 flex-wrap">{t.issuing_body && <span className="text-xs text-gray-400 truncate max-w-[120px]">{t.issuing_body}</span>}{t.closing_date && <span className="text-xs text-red-500 flex-shrink-0">· {t.closing_date}</span>}</div></div>{(t.document_url || t.source_url) && (<a href={t.document_url || t.source_url} target="_blank" rel="noopener noreferrer" className="flex-shrink-0 text-red-500 hover:text-red-700" onClick={e => e.stopPropagation()}><ExternalLink size={11} /></a>)}</div>))}</div><button onClick={() => { setSelMunis(d.municipalities.slice(0, 3)); if (!selProv.includes(d.province)) setSelProv(p => [...p, d.province]); doSearch(1, selInd, selProv.includes(d.province) ? selProv : [...selProv, d.province], d.municipalities.slice(0, 3), keyword) }} className="mt-2 w-full py-1.5 text-xs bg-red-500 hover:bg-red-600 text-white rounded-lg font-medium">Search all {count} tenders →</button><p className="text-xs text-gray-400 mt-1.5">{d.municipalities.slice(0, 3).join(' · ')}{d.municipalities.length > 3 ? ` +${d.municipalities.length - 3}` : ''}</p></div></Popup></Marker>) })}
+        {groupedLocations.map((group, index) => { const iconConfig = createGroupedMarkerIcon(group.count, group.type); return (<Marker key={`group-${index}`} position={[group.lat, group.lng]} icon={L.divIcon(iconConfig)}><Popup maxWidth={300} minWidth={250}><div><div className="flex items-center justify-between mb-2 pb-2 border-b border-gray-100"><div><p className="text-sm font-semibold text-gray-900">{group.name}</p><p className="text-xs text-gray-400 capitalize">{group.type}</p></div><span className="px-2 py-0.5 bg-red-50 text-red-700 text-xs font-bold rounded-full border border-red-200">{group.count} tender{group.count !== 1 ? 's' : ''}</span></div><div className="space-y-1.5 max-h-52 overflow-y-auto">{group.tenders.slice(0, 5).map((t, i) => (<div key={i} className="flex items-start gap-2 p-2 bg-gray-50 rounded-lg"><div className="flex-1 min-w-0"><p className="text-xs font-medium text-gray-800 line-clamp-2">{t.title}</p><p className="text-xs text-gray-400 mt-0.5">{t.issuing_body}</p>{t.closing_date && <p className="text-xs text-red-500 mt-0.5">Closes {t.closing_date}</p>}</div></div>))}</div>{group.count > 5 && <p className="text-xs text-gray-400 mt-2 pt-2 border-t border-gray-100">+{group.count - 5} more tender{group.count - 5 !== 1 ? 's' : ''}</p>}</div></Popup></Marker>) })}
       </MapContainer>
     </div>
   )
 
-  // ===========================================================================
-  // FILTERS PANEL
-  // ===========================================================================
   const FiltersPanel = () => (
     <div className="h-full overflow-y-auto bg-white">
       <div className="p-4 space-y-5">
         <div className="relative"><SearchIcon size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" /><input className="input pl-9 text-sm" placeholder="Keyword..." value={keyword} onChange={e => setKeyword(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSearch()} /></div>
         <div><p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Industry</p><div className="flex flex-wrap gap-1.5">{INDUSTRIES.map(i => <Chip key={i} label={i} selected={selInd.includes(i)} onClick={() => tog(selInd, setSelInd, i)} />)}</div></div>
         <div><p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">Province <span className="font-normal text-gray-300 normal-case">(click to zoom map)</span></p><div className="flex flex-wrap gap-1.5">{PROVINCES.map(p => <Chip key={p} label={p} selected={selProv.includes(p)} onClick={() => handleProvToggle(p)} />)}</div></div>
-        {userLoc && (
-          <div><p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Location</p>
-            <button onClick={() => { const n = !useMyLoc; setUseMyLoc(n); if (n) setFlyTarget({ c: [userLoc.lat, userLoc.lng], z: 8, key: 'loc' + Date.now() }) }} className={`flex items-center gap-1.5 px-3 py-2 rounded-lg border text-xs w-full ${useMyLoc ? 'bg-brand-50 border-brand-300 text-brand-700' : 'border-gray-200 text-gray-600 hover:border-brand-300'}`}><Navigation size={12} />{useMyLoc ? `✓ ${userLoc.name}` : `Use my business location (${userLoc.name})`}</button>
-            {useMyLoc && (<div className="mt-2 px-1"><div className="flex justify-between text-xs text-gray-500 mb-1"><span>Radius</span><span className="font-semibold text-brand-600">{radiusKm}km</span></div><input type="range" min={25} max={500} step={25} value={radiusKm} onChange={e => setRadiusKm(Number(e.target.value))} className="w-full accent-brand-400" /></div>)}
-          </div>
-        )}
+        {userLoc && (<div><p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Location</p><button onClick={() => { const n = !useMyLoc; setUseMyLoc(n); if (n) setSafeFlyTarget([userLoc.lat, userLoc.lng], 8, 'loc' + Date.now()) }} className={`flex items-center gap-1.5 px-3 py-2 rounded-lg border text-xs w-full ${useMyLoc ? 'bg-brand-50 border-brand-300 text-brand-700' : 'border-gray-200 text-gray-600 hover:border-brand-300'}`}><Navigation size={12} />{useMyLoc ? `✓ ${userLoc.name}` : `Use my business location (${userLoc.name})`}</button>{useMyLoc && (<div className="mt-2 px-1"><div className="flex justify-between text-xs text-gray-500 mb-1"><span>Radius</span><span className="font-semibold text-brand-600">{radiusKm}km</span></div><input type="range" min={25} max={500} step={25} value={radiusKm} onChange={e => setRadiusKm(Number(e.target.value))} className="w-full accent-brand-400" /></div>)}</div>)}
         <div><button onClick={() => setShowMunis(v => !v)} className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-700 font-medium">{showMunis ? <ChevronUp size={11} /> : <ChevronDown size={11} />} Municipality filter {selMunis.length > 0 && <span className="px-1.5 py-0.5 bg-brand-100 text-brand-700 rounded-full">{selMunis.length}</span>}</button>{showMunis && <div className="mt-2 max-h-36 overflow-y-auto flex flex-wrap gap-1.5">{muniList.slice(0, 60).map(m => <Chip key={m} label={m} small selected={selMunis.includes(m)} onClick={() => tog(selMunis, setSelMunis, m)} />)}</div>}</div>
         <div className="hidden md:flex items-center justify-between py-2 border-t border-gray-100"><span className="text-xs text-gray-500">Map</span><button onClick={() => setShowMap(v => !v)} className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border ${showMap ? 'bg-brand-50 border-brand-200 text-brand-700' : 'bg-white border-gray-200 text-gray-500'}`}>{showMap ? <><Eye size={11} /> On</> : <><EyeOff size={11} /> Off</>}</button></div>
         <div className="pb-2 space-y-2"><button onClick={handleSearch} disabled={loading} className="btn-primary w-full py-2.5 text-sm flex items-center justify-center gap-2">{loading ? <><Loader size={14} className="animate-spin" /> Searching...</> : <>Search{filterCount > 0 ? ` (${filterCount} filter${filterCount > 1 ? 's' : ''})` : ''}</>}</button>{filterCount > 0 && <button onClick={clearFilters} className="w-full text-xs text-gray-400 hover:text-gray-600 py-1">Clear all filters</button>}</div>
@@ -595,9 +456,6 @@ export default function Search() {
     </div>
   )
 
-  // ===========================================================================
-  // RESULTS PANEL
-  // ===========================================================================
   const ResultsPanel = () => (
     <div className="h-full overflow-y-auto bg-gray-50">
       <div className="p-4 space-y-3">
@@ -610,9 +468,6 @@ export default function Search() {
     </div>
   )
 
-  // ===========================================================================
-  // RENDER
-  // ===========================================================================
   return (
     <div className="flex flex-col overflow-hidden" style={{ height: 'calc(100vh - 0px)' }}>
       <div className="flex-shrink-0 bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between gap-3">
@@ -641,7 +496,20 @@ export default function Search() {
         <div className="flex-1 overflow-hidden">
           {mobileTab === 'filters' && <FiltersPanel />}
           {mobileTab === 'results' && <ResultsPanel />}
-          {mobileTab === 'map' && <div className="h-full"><TheMap scrollWheel={false} /></div>}
+          {mobileTab === 'map' && (
+            <div className="h-full">
+              {mapCenter && mapCenter[0] && !isNaN(mapCenter[0]) ? (
+                <TheMap scrollWheel={false} />
+              ) : (
+                <div className="flex items-center justify-center h-full bg-gray-50">
+                  <div className="text-center">
+                    <div className="w-8 h-8 border-2 border-brand-400 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+                    <p className="text-sm text-gray-500">Loading map...</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 

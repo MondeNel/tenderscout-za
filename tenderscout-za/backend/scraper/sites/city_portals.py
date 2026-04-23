@@ -223,75 +223,61 @@ def _build_result(
     """
     Construct a standardized tender result dictionary from scraped data.
     
-    This is the core normalization function — it takes raw scraped data
-    and produces a consistent output format that the database expects.
-    
-    Processing steps:
-        1. Validate title (minimum length, not empty)
-        2. Identify document URLs (PDF, DOC, etc.)
-        3. Detect or assign geographic information (province, municipality, town)
-        4. Detect industry category from text
-        5. Check if tender is expired (skip if so)
-        6. Generate unique content hash for deduplication
-    
-    Args:
-        title: The tender title/link text
-        href: The URL the link points to (may be relative)
-        city: Portal configuration dictionary
-        listing_url: The page URL where this tender was found
-        closing_date: Extracted closing date string (if available)
-        extra_text: Additional context text (e.g., parent element content)
-        
-    Returns:
-        Standardized tender dict, or None if the result should be filtered out
+    KEY FIX: When a document URL (PDF) is found, it becomes the source_url
+    so users link directly to the tender document, not the listing page.
     """
-    # -------------------------------------------------------------------------
-    # Basic validation — skip empty or suspiciously short titles
-    # -------------------------------------------------------------------------
     if not title or len(title.strip()) < 5:
         return None
 
     # -------------------------------------------------------------------------
     # Document URL detection
-    # If the link points directly to a downloadable file (PDF, DOC, etc.),
-    # capture it as the document_url. Otherwise it remains None.
     # -------------------------------------------------------------------------
     doc_url = None
     if href:
-        # Case 1: Absolute URL that ends with a document extension
         if href.startswith("http") and any(href.lower().endswith(ext) for ext in [".pdf", ".doc", ".docx", ".zip"]):
             doc_url = href
-        # Case 2: URL contains document extension somewhere (e.g., with query params)
         elif any(ext in href.lower() for ext in [".pdf", ".doc", ".docx"]):
             doc_url = href if href.startswith("http") else None
 
     # -------------------------------------------------------------------------
+    # KEY FIX: Set source_url intelligently
+    # -------------------------------------------------------------------------
+    # Priority 1: If we found a document/PDF, link directly to it
+    # Priority 2: If href is an individual tender page (not same as listing), use it
+    # Priority 3: Fall back to the listing page URL
+    # -------------------------------------------------------------------------
+    if doc_url:
+        # Link directly to the PDF/document so users see the tender immediately
+        source_url = doc_url
+    elif href and href.startswith("http") and href != listing_url and not href.endswith((".pdf", ".doc", ".docx", ".zip")):
+        # Use the individual tender page if it's different from the listing
+        source_url = href
+    else:
+        # Fall back to listing page
+        source_url = listing_url
+
+    # -------------------------------------------------------------------------
     # Geographic detection
-    # Combine title and any extra context text for better detection accuracy
     # -------------------------------------------------------------------------
     detection_text = f"{title} {extra_text}"
     
-    # Determine province: either detect from text or use the portal's default
     if city.get("allow_province_detection", False):
         detected = detect_province(detection_text)
         province = detected if detected else city["province"]
     else:
         province = city["province"]
 
-    # Determine municipality: try to detect, fall back to portal name
     municipality = detect_municipality(detection_text, province) or city["name"]
-    
-    # Determine town: try to detect, fall back to portal's default town
     town = detect_town(detection_text, province) or city.get("town")
 
     # -------------------------------------------------------------------------
-    # Expiry filtering — skip tenders with closing dates in the past
+    # Expiry filtering
     # -------------------------------------------------------------------------
     if closing_date and is_closing_date_expired(closing_date):
         return None
 
     # -------------------------------------------------------------------------
-    # Build and return the standardized result dictionary
+    # Build result
     # -------------------------------------------------------------------------
     return {
         "title": title.strip(),
@@ -302,13 +288,13 @@ def _build_result(
         "town": town,
         "industry_category": detect_industry(detection_text),
         "closing_date": closing_date,
-        "posted_date": "",  # Most municipal sites don't show posted dates
-        "source_url": listing_url,
+        "posted_date": "",
+        "source_url": source_url,          # ← NOW POINTS TO PDF/DETAIL PAGE
         "document_url": doc_url,
         "source_site": urlparse(city["url"]).netloc.replace("www.", ""),
-        "reference_number": "",  # To be filled by site-specific scrapers if available
-        "contact_info": "",      # To be filled by site-specific scrapers if available
-        "content_hash": make_content_hash(title, listing_url),  # For deduplication
+        "reference_number": "",
+        "contact_info": "",
+        "content_hash": make_content_hash(title, source_url),  # ← Use new source_url
     }
 
 
