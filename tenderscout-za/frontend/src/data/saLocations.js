@@ -411,35 +411,79 @@ export function groupTendersByLocation(tenders) {
  * Create a marker icon for grouped location pins with count badge
  */
 export function createGroupedMarkerIcon(count, type = 'town') {
-  const colors = {
-    town: '#1D9E75',
-    municipality: '#F59E0B',
-    province: '#6B7280'
-  }
-  
-  const bgColor = colors[type] || colors.province
   const size = count > 50 ? 44 : count > 20 ? 38 : count > 10 ? 32 : 28
   
   return {
     html: `<div style="
+      position: relative;
       width: ${size}px;
-      height: ${size}px;
-      background: ${bgColor};
-      border: 2.5px solid white;
-      border-radius: 50%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-      cursor: pointer;
-      font-family: system-ui, sans-serif;
-      font-weight: 700;
-      font-size: ${size > 36 ? 13 : 11}px;
-      color: white;
-    ">${count > 99 ? '99+' : count}</div>`,
-    iconSize: [size, size],
-    iconAnchor: [size/2, size/2],
-    popupAnchor: [0, -size/2 - 4],
+      height: ${size + 6}px;
+    ">
+      <!-- Pin circle with count -->
+      <div style="
+        width: ${size}px;
+        height: ${size}px;
+        background: linear-gradient(135deg, #EF4444, #DC2626);
+        border: 3px solid white;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 3px 8px rgba(0,0,0,0.4);
+        cursor: pointer;
+        font-family: system-ui, sans-serif;
+        font-weight: 700;
+        font-size: ${size > 36 ? 13 : 11}px;
+        color: white;
+        position: relative;
+        z-index: 2;
+      ">${count > 99 ? '99+' : count}</div>
+      <!-- Pin point (triangle) -->
+      <div style="
+        position: absolute;
+        bottom: 0;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 0;
+        height: 0;
+        border-left: 6px solid transparent;
+        border-right: 6px solid transparent;
+        border-top: 8px solid #DC2626;
+        z-index: 1;
+      "></div>
+      <!-- Small shadow dot -->
+      <div style="
+        position: absolute;
+        bottom: -2px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 8px;
+        height: 4px;
+        background: rgba(0,0,0,0.2);
+        border-radius: 50%;
+      "></div>
+    </div>`,
+    iconSize: [size, size + 10],
+    iconAnchor: [size/2, size + 8],
+    popupAnchor: [0, -(size/2) - 4],
     className: ''
+  }
+}
+
+/**
+ * Fetch a driving route between two points using OSRM
+ * Returns an array of [lat, lng] coordinates for the route line
+ */
+export async function getRoute(fromLat, fromLng, toLat, toLng) {
+  try {
+    const url = `https://router.project-osrm.org/route/v1/driving/${fromLng},${fromLat};${toLng},${toLat}?overview=full&geometries=geojson`
+    const response = await fetch(url)
+    const data = await response.json()
+    if (data.code === 'Ok' && data.routes.length > 0) {
+      return data.routes[0].geometry.coordinates.map(([lng, lat]) => [lat, lng])
+    }
+    return null
+  } catch {
+    return null
   }
 }

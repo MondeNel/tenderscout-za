@@ -2,20 +2,25 @@
  * File: src/pages/Search.jsx
  * Purpose: Advanced Tender Search Page with Interactive Map
  * 
- * Map auto-zooms to user's province on first visit.
+ * Features:
+ *   - OSM HOT tiles showing roads, town names, and routes
+ *   - Auto-zooms to user's province on first visit
+ *   - Red location pins for tenders
+ *   - Driving route lines from user to tender locations
+ *   - Route lines via OSRM (Open Source Routing Machine)
  */
 
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { searchTenders } from '../api/tenders'
-import { getMunicipalities, SA_LOCATIONS, groupTendersByLocation, createGroupedMarkerIcon } from '../data/saLocations'
+import { getMunicipalities, SA_LOCATIONS, groupTendersByLocation, createGroupedMarkerIcon, getTenderCoordinates, getRoute } from '../data/saLocations'
 import TenderCard from '../components/TenderCard'
 import {
   Search as SearchIcon, Filter, Navigation,
   ChevronDown, ChevronUp, Loader, TrendingUp, ExternalLink,
-  Eye, EyeOff,
+  Eye, EyeOff, X,
 } from 'lucide-react'
-import { MapContainer, TileLayer, Marker, Popup, useMap, Circle } from 'react-leaflet'
+import { MapContainer, TileLayer, Marker, Popup, useMap, Circle, Polyline } from 'react-leaflet'
 import L from 'leaflet'
 import toast from 'react-hot-toast'
 import 'leaflet/dist/leaflet.css'
@@ -35,9 +40,15 @@ L.Icon.Default.mergeOptions({
 // =============================================================================
 const SA_BOUNDS = [[-35.5, 16.2], [-22.0, 33.0]]
 const SA_CENTER = [-29.0, 25.0]
-const SA_ZOOM = 5
-const PROV_ZOOM = 7
-const TOWN_ZOOM = 10
+const SA_ZOOM = 6
+const PROV_ZOOM = 9
+const TOWN_ZOOM = 12
+
+// =============================================================================
+// MAP TILE PROVIDER — OSM HOT (shows roads, towns, routes clearly)
+// =============================================================================
+const MAP_TILE_URL = "https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png"
+const MAP_ATTRIBUTION = '© <a href="https://www.openstreetmap.org">OpenStreetMap</a> contributors'
 
 // =============================================================================
 // FILTER OPTIONS
@@ -65,13 +76,13 @@ const PROVINCE_CENTERS = {
 }
 
 // =============================================================================
-// HELPER: District marker with tender count
+// HELPER: District marker with tender count (RED theme)
 // =============================================================================
 function makeDistrictIcon(count, sel = false) {
   const s = count > 100 ? 52 : count > 50 ? 46 : count > 20 ? 40 : count > 5 ? 34 : 28
-  const bg = sel ? '#085041' : count > 100 ? '#1D9E75' : count > 50 ? '#2aa882'
-           : count > 20 ? '#5DCAA5' : count > 5 ? '#9FE1CB' : '#c8f0e3'
-  const fg = (count > 10 || sel) ? '#fff' : '#085041'
+  const bg = sel ? '#991B1B' : count > 100 ? '#DC2626' : count > 50 ? '#EF4444'
+           : count > 20 ? '#F87171' : count > 5 ? '#FCA5A5' : '#FEE2E2'
+  const fg = (count > 10 || sel) ? '#fff' : '#991B1B'
   return L.divIcon({
     className: '',
     html: `<div style="width:${s}px;height:${s}px;background:${bg};
@@ -118,17 +129,82 @@ function Chip({ label, selected, onClick, small = false }) {
 }
 
 // =============================================================================
+// HELPER: Detail Row for Tender View
+// =============================================================================
+function DetailRow({ label, value, valueClass }) {
+  if (!value) return null
+  return (
+    <div>
+      <p className="text-xs text-gray-400 uppercase tracking-wide mb-1">{label}</p>
+      <p className={valueClass || "text-sm text-gray-600"}>{value}</p>
+    </div>
+  )
+}
+
+// =============================================================================
+// HELPER: Tender Detail View (replaces map when tender selected)
+// =============================================================================
+function TenderDetailView({ tender, onClose }) {
+  if (!tender) return null
+  return (
+    <div className="h-full flex flex-col bg-white">
+      <div className="flex items-start justify-between gap-3 px-5 py-4 border-b border-gray-200 bg-white flex-shrink-0">
+        <div className="min-w-0">
+          <h2 className="text-base font-semibold text-gray-900 leading-snug line-clamp-2">{tender.title}</h2>
+          <p className="text-sm text-gray-500 mt-0.5">
+            {[tender.issuing_body, tender.province ? ((tender.town ? tender.town + ', ' : '') + tender.province) : null, tender.closing_date ? ('Closes ' + tender.closing_date) : null].filter(Boolean).join(' • ')}
+          </p>
+        </div>
+        <button onClick={onClose} className="flex-shrink-0 p-1.5 rounded-lg hover:bg-gray-100 text-gray-500"><X size={18} /></button>
+      </div>
+      <div className="flex-1 overflow-y-auto p-5">
+        {(tender.document_url || tender.source_url) && (
+          <div className="mb-4">
+            <a href={tender.document_url || tender.source_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 px-4 py-2 bg-brand-400 hover:bg-brand-600 text-white rounded-lg text-sm font-medium"><ExternalLink size={15} /> Open tender document</a>
+          </div>
+        )}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <DetailRow label="Title" value={tender.title} />
+          <DetailRow label="Issuing Body" value={tender.issuing_body} />
+          <DetailRow label="Reference Number" value={tender.reference_number} />
+          <DetailRow label="Closing Date" value={tender.closing_date} valueClass="text-red-500 font-medium" />
+          <DetailRow label="Province" value={tender.province} />
+          <DetailRow label="Municipality" value={tender.municipality} />
+          <DetailRow label="Town" value={tender.town} />
+          <DetailRow label="Industry" value={tender.industry_category} />
+          <DetailRow label="Source" value={tender.source_site} />
+        </div>
+        {tender.description && (
+          <div className="mt-4">
+            <p className="text-xs text-gray-400 uppercase tracking-wide mb-2">Description</p>
+            <p className="text-sm text-gray-600 whitespace-pre-line">{tender.description}</p>
+          </div>
+        )}
+        {tender.contact_info && (
+          <div className="mt-4">
+            <p className="text-xs text-gray-400 uppercase tracking-wide mb-2">Contact Information</p>
+            <p className="text-sm text-gray-600">{tender.contact_info}</p>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// =============================================================================
 // MAIN COMPONENT
 // =============================================================================
 export default function Search() {
   const { user, refreshUser, lastSearch, saveLastSearch } = useAuth()
 
+  // FILTER STATE
   const [keyword, setKeyword] = useState(lastSearch?.keyword || '')
   const [selInd, setSelInd] = useState(lastSearch?.industries || user?.industry_preferences || [])
   const [selProv, setSelProv] = useState(lastSearch?.provinces || user?.province_preferences || [])
   const [selMunis, setSelMunis] = useState(lastSearch?.municipalities || [])
   const [showMunis, setShowMunis] = useState(false)
 
+  // LOCATION STATE
   const [useMyLoc, setUseMyLoc] = useState(false)
   const [radiusKm, setRadiusKm] = useState(user?.search_radius_km || 100)
   const userLoc = useMemo(() => {
@@ -136,13 +212,16 @@ export default function Search() {
     return { lat: user.business_lat, lng: user.business_lng, name: user.business_location || 'My location' }
   }, [user])
 
+  // MAP STATE
   const [showMap, setShowMap] = useState(true)
   const [flyTarget, setFlyTarget] = useState(null)
   const [mapData, setMapData] = useState({ districts: [], total: 0 })
   const [mapLoading, setMapLoading] = useState(false)
   const [activePop, setActivePop] = useState(null)
   const [selectedTender, setSelectedTender] = useState(null)
+  const [routes, setRoutes] = useState([])  // ← ROUTE STATE
 
+  // RESULTS STATE
   const [results, setResults] = useState([])
   const [total, setTotal] = useState(0)
   const [charged, setCharged] = useState(0)
@@ -150,10 +229,10 @@ export default function Search() {
   const [searched, setSearched] = useState(false)
   const [page, setPage] = useState(1)
 
+  // UI STATE
   const [showFilters, setShowFilters] = useState(true)
   const [mobileTab, setMobileTab] = useState('filters')
 
-  // Track if initial load has happened
   const initialLoadDone = useRef(false)
 
   const tog = (list, set, v) =>
@@ -164,15 +243,10 @@ export default function Search() {
   // ===========================================================================
   // MAP CENTER - Based on user's saved location
   // ===========================================================================
-  
   const mapCenter = useMemo(() => {
-    if (user?.business_lat && user?.business_lng) {
-      return [user.business_lat, user.business_lng]
-    }
+    if (user?.business_lat && user?.business_lng) return [user.business_lat, user.business_lng]
     const up = user?.province_preferences?.[0] || selProv[0]
-    if (up && PROVINCE_CENTERS[up]) {
-      return PROVINCE_CENTERS[up]
-    }
+    if (up && PROVINCE_CENTERS[up]) return PROVINCE_CENTERS[up]
     return SA_CENTER
   }, [user, selProv])
 
@@ -234,25 +308,71 @@ export default function Search() {
   useEffect(() => { fetchMapData() }, [fetchMapData])
 
   // ===========================================================================
-  // INITIAL LOAD - Auto-zoom to user's province & load preferences
+  // INITIAL LOAD - Auto-zoom to user's province
   // ===========================================================================
   useEffect(() => {
     if (!user || initialLoadDone.current) return
     initialLoadDone.current = true
-    
     const indPref = user.industry_preferences || []
     const provPref = user.province_preferences || []
-    
-    // Auto-zoom map to user's province
     if (provPref.length > 0 && PROVINCE_CENTERS[provPref[0]]) {
       setFlyTarget({ c: PROVINCE_CENTERS[provPref[0]], z: PROV_ZOOM, key: 'user-prov' + Date.now() })
     } else if (user?.business_lat && user?.business_lng) {
       setFlyTarget({ c: [user.business_lat, user.business_lng], z: TOWN_ZOOM, key: 'user-town' + Date.now() })
     }
-    
     doSearch(1, indPref, provPref, [], '')
   }, [user?.id])
 
+  // ===========================================================================
+  // ROUTE FETCHING — Get driving directions from user to tender locations
+  // ===========================================================================
+  useEffect(() => {
+    if (!user?.business_lat || !user?.business_lng || results.length === 0) {
+      setRoutes([])
+      return
+    }
+    
+    let cancelled = false
+    
+    const fetchRoutes = async () => {
+      const routeLines = []
+      
+      // Get unique tender locations (max 5)
+      const uniqueLocations = new Map()
+      for (const tender of results.slice(0, 10)) {
+        const coords = getTenderCoordinates(tender)
+        if (coords) {
+          const key = `${coords.lat.toFixed(4)},${coords.lng.toFixed(4)}`
+          if (!uniqueLocations.has(key)) {
+            uniqueLocations.set(key, coords)
+          }
+        }
+      }
+      
+      const locations = [...uniqueLocations.values()].slice(0, 5)
+      
+      for (const loc of locations) {
+        if (cancelled) break
+        const route = await getRoute(user.business_lat, user.business_lng, loc.lat, loc.lng)
+        if (route && !cancelled) {
+          routeLines.push({
+            positions: route,
+            name: loc.name,
+            color: `hsl(${Math.floor(Math.random() * 30 + 5)}, 65%, 48%)`, // Red/orange tones
+          })
+        }
+      }
+      
+      if (!cancelled) setRoutes(routeLines)
+    }
+    
+    fetchRoutes()
+    return () => { cancelled = true }
+  }, [results, user])
+
+  // ===========================================================================
+  // SEARCH
+  // ===========================================================================
   const doSearch = async (p = 1, industries = selInd, provinces = selProv, munis = selMunis, kw = keyword) => {
     setLoading(true)
     try {
@@ -281,10 +401,10 @@ export default function Search() {
   }
 
   const handleSearch = () => doSearch(1)
-
   const clearFilters = () => {
     setKeyword(''); setSelInd([]); setSelProv([]); setSelMunis([])
     setUseMyLoc(false)
+    setRoutes([])
     setFlyTarget({ c: SA_CENTER, z: SA_ZOOM, key: 'clear' + Date.now() })
     doSearch(1, [], [], [], '')
   }
@@ -301,8 +421,12 @@ export default function Search() {
 
   const groupedLocations = useMemo(() => groupTendersByLocation(results), [results])
 
+  // ===========================================================================
+  // MAP COMPONENT
+  // ===========================================================================
   const TheMap = ({ scrollWheel = true }) => (
     <div className="relative w-full h-full">
+      {/* Stats bar */}
       <div className="absolute top-3 left-3 z-10 pointer-events-none flex gap-2">
         <div className="bg-white rounded-full px-3 py-1.5 shadow border border-gray-200 flex items-center gap-1.5">
           <TrendingUp size={12} className="text-brand-400" />
@@ -311,36 +435,72 @@ export default function Search() {
         </div>
       </div>
 
-      <button onClick={() => setShowMap(false)}
-        className="absolute top-3 right-3 z-10 bg-white rounded-full px-3 py-1.5 shadow border border-gray-200 flex items-center gap-1.5 text-xs text-gray-500 hover:text-brand-600">
+      <button onClick={() => setShowMap(false)} className="absolute top-3 right-3 z-10 bg-white rounded-full px-3 py-1.5 shadow border border-gray-200 flex items-center gap-1.5 text-xs text-gray-500 hover:text-brand-600">
         <EyeOff size={11} /> Hide map
       </button>
 
+      {/* Legend */}
       <div className="absolute bottom-8 right-3 z-10 bg-white rounded-xl px-3 py-2 shadow border border-gray-200">
-        <p className="text-xs text-gray-400 mb-1.5 font-medium">Districts</p>
-        {[['#c8f0e3','1–5'],['#9FE1CB','6–20'],['#5DCAA5','21–50'],['#2aa882','51–100'],['#1D9E75','100+']].map(([c,l]) => (
+        <p className="text-xs text-gray-400 mb-1.5 font-medium">Tenders</p>
+        {[['#FEE2E2','1–5'],['#FCA5A5','6–20'],['#F87171','21–50'],['#EF4444','51–100'],['#DC2626','100+']].map(([c,l]) => (
           <div key={l} className="flex items-center gap-1.5 mb-0.5">
             <div className="w-3 h-3 rounded-full" style={{ background: c }} />
             <span className="text-xs text-gray-500">{l}</span>
           </div>
         ))}
-        <p className="text-xs text-gray-400 mt-2 mb-1">Locations</p>
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full bg-[#1D9E75]" /><span className="text-xs text-gray-500">Town</span></div>
-          <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full bg-[#F59E0B]" /><span className="text-xs text-gray-500">Municipality</span></div>
-          <div className="flex items-center gap-1"><div className="w-3 h-3 rounded-full bg-[#6B7280]" /><span className="text-xs text-gray-500">Province</span></div>
-        </div>
+        {routes.length > 0 && (
+          <>
+            <p className="text-xs text-gray-400 mt-2 mb-1">Routes</p>
+            <div className="flex items-center gap-1.5">
+              <div className="w-6 h-0.5 rounded" style={{ background: '#EF4444', opacity: 0.7, borderTop: '2px dashed #EF4444' }} />
+              <span className="text-xs text-gray-500">Driving directions</span>
+            </div>
+          </>
+        )}
       </div>
 
       <MapContainer center={mapCenter} zoom={mapZoom} maxBounds={SA_BOUNDS} maxBoundsViscosity={1.0} minZoom={5} maxZoom={14}
         style={{ height: '100%', width: '100%' }} scrollWheelZoom={scrollWheel}>
-        <TileLayer attribution='© <a href="https://www.openstreetmap.org">OpenStreetMap</a>' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" bounds={SA_BOUNDS} />
+        
+        {/* OSM HOT tiles — roads, towns, routes */}
+        <TileLayer attribution={MAP_ATTRIBUTION} url={MAP_TILE_URL} bounds={SA_BOUNDS} />
         <FlyCtrl target={flyTarget} />
 
-        {/* User location marker (always show if user has coordinates) */}
+        {/* =================================================================
+            ROUTE LINES — Driving directions from user to tender locations
+            ================================================================= */}
+        {routes.map((route, index) => (
+          <Polyline
+            key={`route-${index}`}
+            positions={route.positions}
+            pathOptions={{
+              color: route.color,
+              weight: 3,
+              opacity: 0.7,
+              dashArray: '8 8',
+            }}
+          >
+            <Popup>
+              <p className="text-xs font-semibold">Route to {route.name}</p>
+              <p className="text-xs text-gray-500">Driving directions via OSRM</p>
+            </Popup>
+          </Polyline>
+        ))}
+
+        {/* User location marker */}
         {user?.business_lat && user?.business_lng && (
           <Marker position={[user.business_lat, user.business_lng]}
-            icon={L.divIcon({ html: `<div style="width:14px;height:14px;background:#1D9E75;border:3px solid white;border-radius:50%;box-shadow:0 0 0 4px rgba(29,158,117,.2)"></div>`, iconSize: [14,14], iconAnchor: [7,7] })}>
+            icon={L.divIcon({ 
+              className: '',
+              html: `<div style="
+                width: 18px; height: 18px;
+                background: #1D9E75;
+                border: 3px solid white;
+                border-radius: 50%;
+                box-shadow: 0 0 0 5px rgba(29, 158, 117, 0.3);
+              "></div>`,
+              iconSize: [18, 18], iconAnchor: [9, 9],
+            })}>
             <Popup><strong>{user.business_location || 'Your location'}</strong></Popup>
           </Marker>
         )}
@@ -361,26 +521,23 @@ export default function Search() {
                 <div>
                   <div className="flex items-center justify-between mb-2 pb-2 border-b border-gray-100">
                     <div><p className="text-sm font-semibold text-gray-900">{d.district}</p><p className="text-xs text-gray-400">{d.province}</p></div>
-                    <span className="px-2 py-0.5 bg-brand-50 text-brand-700 text-xs font-bold rounded-full border border-brand-200">{count} tender{count !== 1 ? 's' : ''}</span>
+                    <span className="px-2 py-0.5 bg-red-50 text-red-700 text-xs font-bold rounded-full border border-red-200">{count} tender{count !== 1 ? 's' : ''}</span>
                   </div>
                   <div className="space-y-1.5 max-h-52 overflow-y-auto">
                     {d.tenders.slice(0, 5).map((t, i) => (
                       <div key={i} className="flex items-start gap-2 p-2 bg-gray-50 rounded-lg">
                         <div className="flex-1 min-w-0">
                           <p className="text-xs font-medium text-gray-800 line-clamp-2">{t.title}</p>
-                          <div className="flex items-center gap-1 mt-0.5 flex-wrap">
-                            {t.issuing_body && <span className="text-xs text-gray-400 truncate max-w-[120px]">{t.issuing_body}</span>}
-                            {t.closing_date && <span className="text-xs text-red-500 flex-shrink-0">· {t.closing_date}</span>}
-                          </div>
+                          <div className="flex items-center gap-1 mt-0.5 flex-wrap">{t.issuing_body && <span className="text-xs text-gray-400 truncate max-w-[120px]">{t.issuing_body}</span>}{t.closing_date && <span className="text-xs text-red-500 flex-shrink-0">· {t.closing_date}</span>}</div>
                         </div>
                         {(t.document_url || t.source_url) && (
-                          <a href={t.document_url || t.source_url} target="_blank" rel="noopener noreferrer" className="flex-shrink-0 text-brand-500 hover:text-brand-700" onClick={e => e.stopPropagation()}><ExternalLink size={11} /></a>
+                          <a href={t.document_url || t.source_url} target="_blank" rel="noopener noreferrer" className="flex-shrink-0 text-red-500 hover:text-red-700" onClick={e => e.stopPropagation()}><ExternalLink size={11} /></a>
                         )}
                       </div>
                     ))}
                   </div>
                   <button onClick={() => { setSelMunis(d.municipalities.slice(0, 3)); if (!selProv.includes(d.province)) setSelProv(p => [...p, d.province]); doSearch(1, selInd, selProv.includes(d.province) ? selProv : [...selProv, d.province], d.municipalities.slice(0, 3), keyword) }}
-                    className="mt-2 w-full py-1.5 text-xs bg-brand-400 hover:bg-brand-600 text-white rounded-lg font-medium">Search all {count} tenders →</button>
+                    className="mt-2 w-full py-1.5 text-xs bg-red-500 hover:bg-red-600 text-white rounded-lg font-medium">Search all {count} tenders →</button>
                   <p className="text-xs text-gray-400 mt-1.5">{d.municipalities.slice(0, 3).join(' · ')}{d.municipalities.length > 3 ? ` +${d.municipalities.length - 3}` : ''}</p>
                 </div>
               </Popup>
@@ -396,30 +553,17 @@ export default function Search() {
               <Popup maxWidth={300} minWidth={250}>
                 <div>
                   <div className="flex items-center justify-between mb-2 pb-2 border-b border-gray-100">
-                    <div>
-                      <p className="text-sm font-semibold text-gray-900">{group.name}</p>
-                      <p className="text-xs text-gray-400 capitalize">{group.type}</p>
-                    </div>
-                    <span className="px-2 py-0.5 bg-brand-50 text-brand-700 text-xs font-bold rounded-full border border-brand-200">
-                      {group.count} tender{group.count !== 1 ? 's' : ''}
-                    </span>
+                    <div><p className="text-sm font-semibold text-gray-900">{group.name}</p><p className="text-xs text-gray-400 capitalize">{group.type}</p></div>
+                    <span className="px-2 py-0.5 bg-red-50 text-red-700 text-xs font-bold rounded-full border border-red-200">{group.count} tender{group.count !== 1 ? 's' : ''}</span>
                   </div>
                   <div className="space-y-1.5 max-h-52 overflow-y-auto">
                     {group.tenders.slice(0, 5).map((t, i) => (
                       <div key={i} className="flex items-start gap-2 p-2 bg-gray-50 rounded-lg">
-                        <div className="flex-1 min-w-0">
-                          <p className="text-xs font-medium text-gray-800 line-clamp-2">{t.title}</p>
-                          <p className="text-xs text-gray-400 mt-0.5">{t.issuing_body}</p>
-                          {t.closing_date && <p className="text-xs text-red-500 mt-0.5">Closes {t.closing_date}</p>}
-                        </div>
+                        <div className="flex-1 min-w-0"><p className="text-xs font-medium text-gray-800 line-clamp-2">{t.title}</p><p className="text-xs text-gray-400 mt-0.5">{t.issuing_body}</p>{t.closing_date && <p className="text-xs text-red-500 mt-0.5">Closes {t.closing_date}</p>}</div>
                       </div>
                     ))}
                   </div>
-                  {group.count > 5 && (
-                    <p className="text-xs text-gray-400 mt-2 pt-2 border-t border-gray-100">
-                      +{group.count - 5} more tender{group.count - 5 !== 1 ? 's' : ''}
-                    </p>
-                  )}
+                  {group.count > 5 && <p className="text-xs text-gray-400 mt-2 pt-2 border-t border-gray-100">+{group.count - 5} more tender{group.count - 5 !== 1 ? 's' : ''}</p>}
                 </div>
               </Popup>
             </Marker>
@@ -429,131 +573,69 @@ export default function Search() {
     </div>
   )
 
+  // ===========================================================================
+  // FILTERS PANEL
+  // ===========================================================================
   const FiltersPanel = () => (
     <div className="h-full overflow-y-auto bg-white">
       <div className="p-4 space-y-5">
-        <div className="relative">
-          <SearchIcon size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-          <input className="input pl-9 text-sm" placeholder="Keyword..." value={keyword} onChange={e => setKeyword(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSearch()} />
-        </div>
-        <div>
-          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Industry</p>
-          <div className="flex flex-wrap gap-1.5">{INDUSTRIES.map(i => <Chip key={i} label={i} selected={selInd.includes(i)} onClick={() => tog(selInd, setSelInd, i)} />)}</div>
-        </div>
-        <div>
-          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">Province <span className="font-normal text-gray-300 normal-case">(click to zoom map)</span></p>
-          <div className="flex flex-wrap gap-1.5">{PROVINCES.map(p => <Chip key={p} label={p} selected={selProv.includes(p)} onClick={() => handleProvToggle(p)} />)}</div>
-        </div>
+        <div className="relative"><SearchIcon size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" /><input className="input pl-9 text-sm" placeholder="Keyword..." value={keyword} onChange={e => setKeyword(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSearch()} /></div>
+        <div><p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Industry</p><div className="flex flex-wrap gap-1.5">{INDUSTRIES.map(i => <Chip key={i} label={i} selected={selInd.includes(i)} onClick={() => tog(selInd, setSelInd, i)} />)}</div></div>
+        <div><p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">Province <span className="font-normal text-gray-300 normal-case">(click to zoom map)</span></p><div className="flex flex-wrap gap-1.5">{PROVINCES.map(p => <Chip key={p} label={p} selected={selProv.includes(p)} onClick={() => handleProvToggle(p)} />)}</div></div>
         {userLoc && (
-          <div>
-            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Location</p>
-            <button onClick={() => { const n = !useMyLoc; setUseMyLoc(n); if (n) setFlyTarget({ c: [userLoc.lat, userLoc.lng], z: 8, key: 'loc' + Date.now() }) }}
-              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg border text-xs w-full ${useMyLoc ? 'bg-brand-50 border-brand-300 text-brand-700' : 'border-gray-200 text-gray-600 hover:border-brand-300'}`}>
-              <Navigation size={12} />{useMyLoc ? `✓ ${userLoc.name}` : `Use my business location (${userLoc.name})`}
-            </button>
-            {useMyLoc && (
-              <div className="mt-2 px-1">
-                <div className="flex justify-between text-xs text-gray-500 mb-1"><span>Radius</span><span className="font-semibold text-brand-600">{radiusKm}km</span></div>
-                <input type="range" min={25} max={500} step={25} value={radiusKm} onChange={e => setRadiusKm(Number(e.target.value))} className="w-full accent-brand-400" />
-              </div>
-            )}
+          <div><p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Location</p>
+            <button onClick={() => { const n = !useMyLoc; setUseMyLoc(n); if (n) setFlyTarget({ c: [userLoc.lat, userLoc.lng], z: 8, key: 'loc' + Date.now() }) }} className={`flex items-center gap-1.5 px-3 py-2 rounded-lg border text-xs w-full ${useMyLoc ? 'bg-brand-50 border-brand-300 text-brand-700' : 'border-gray-200 text-gray-600 hover:border-brand-300'}`}><Navigation size={12} />{useMyLoc ? `✓ ${userLoc.name}` : `Use my business location (${userLoc.name})`}</button>
+            {useMyLoc && (<div className="mt-2 px-1"><div className="flex justify-between text-xs text-gray-500 mb-1"><span>Radius</span><span className="font-semibold text-brand-600">{radiusKm}km</span></div><input type="range" min={25} max={500} step={25} value={radiusKm} onChange={e => setRadiusKm(Number(e.target.value))} className="w-full accent-brand-400" /></div>)}
           </div>
         )}
-        <div>
-          <button onClick={() => setShowMunis(v => !v)} className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-700 font-medium">
-            {showMunis ? <ChevronUp size={11} /> : <ChevronDown size={11} />} Municipality filter {selMunis.length > 0 && <span className="px-1.5 py-0.5 bg-brand-100 text-brand-700 rounded-full">{selMunis.length}</span>}
-          </button>
-          {showMunis && <div className="mt-2 max-h-36 overflow-y-auto flex flex-wrap gap-1.5">{muniList.slice(0, 60).map(m => <Chip key={m} label={m} small selected={selMunis.includes(m)} onClick={() => tog(selMunis, setSelMunis, m)} />)}</div>}
-        </div>
-        <div className="hidden md:flex items-center justify-between py-2 border-t border-gray-100">
-          <span className="text-xs text-gray-500">Map</span>
-          <button onClick={() => setShowMap(v => !v)} className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border ${showMap ? 'bg-brand-50 border-brand-200 text-brand-700' : 'bg-white border-gray-200 text-gray-500'}`}>
-            {showMap ? <><Eye size={11} /> On</> : <><EyeOff size={11} /> Off</>}
-          </button>
-        </div>
-        <div className="pb-2 space-y-2">
-          <button onClick={handleSearch} disabled={loading} className="btn-primary w-full py-2.5 text-sm flex items-center justify-center gap-2">
-            {loading ? <><Loader size={14} className="animate-spin" /> Searching...</> : <>Search{filterCount > 0 ? ` (${filterCount} filter${filterCount > 1 ? 's' : ''})` : ''}</>}
-          </button>
-          {filterCount > 0 && <button onClick={clearFilters} className="w-full text-xs text-gray-400 hover:text-gray-600 py-1">Clear all filters</button>}
-        </div>
+        <div><button onClick={() => setShowMunis(v => !v)} className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-700 font-medium">{showMunis ? <ChevronUp size={11} /> : <ChevronDown size={11} />} Municipality filter {selMunis.length > 0 && <span className="px-1.5 py-0.5 bg-brand-100 text-brand-700 rounded-full">{selMunis.length}</span>}</button>{showMunis && <div className="mt-2 max-h-36 overflow-y-auto flex flex-wrap gap-1.5">{muniList.slice(0, 60).map(m => <Chip key={m} label={m} small selected={selMunis.includes(m)} onClick={() => tog(selMunis, setSelMunis, m)} />)}</div>}</div>
+        <div className="hidden md:flex items-center justify-between py-2 border-t border-gray-100"><span className="text-xs text-gray-500">Map</span><button onClick={() => setShowMap(v => !v)} className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border ${showMap ? 'bg-brand-50 border-brand-200 text-brand-700' : 'bg-white border-gray-200 text-gray-500'}`}>{showMap ? <><Eye size={11} /> On</> : <><EyeOff size={11} /> Off</>}</button></div>
+        <div className="pb-2 space-y-2"><button onClick={handleSearch} disabled={loading} className="btn-primary w-full py-2.5 text-sm flex items-center justify-center gap-2">{loading ? <><Loader size={14} className="animate-spin" /> Searching...</> : <>Search{filterCount > 0 ? ` (${filterCount} filter${filterCount > 1 ? 's' : ''})` : ''}</>}</button>{filterCount > 0 && <button onClick={clearFilters} className="w-full text-xs text-gray-400 hover:text-gray-600 py-1">Clear all filters</button>}</div>
       </div>
     </div>
   )
 
+  // ===========================================================================
+  // RESULTS PANEL
+  // ===========================================================================
   const ResultsPanel = () => (
     <div className="h-full overflow-y-auto bg-gray-50">
       <div className="p-4 space-y-3">
-        {searched && !loading && (
-          <div className="flex items-center justify-between">
-            <p className="text-sm font-medium text-gray-700">{total} result{total !== 1 ? 's' : ''}</p>
-            {charged > 0 && <p className="text-xs text-gray-400">{charged} credit{charged !== 1 ? 's' : ''} used</p>}
-          </div>
-        )}
-        {loading && (
-          <div className="flex flex-col items-center justify-center py-24 gap-3">
-            <div className="w-8 h-8 border-2 border-brand-400 border-t-transparent rounded-full animate-spin" />
-            <p className="text-sm text-gray-400">Loading tenders...</p>
-          </div>
-        )}
-        {!loading && searched && results.length === 0 && (
-          <div className="flex flex-col items-center justify-center py-20 gap-2 text-center">
-            <p className="text-sm text-gray-500">No tenders found</p>
-            <p className="text-xs text-gray-400">Try removing filters or selecting a different province</p>
-          </div>
-        )}
-        {!loading && results.map(t => (
-          <TenderCard key={t.id} tender={t} showBadgeColor onView={(tender) => setSelectedTender(tender)} />
-        ))}
-        {total > 20 && !loading && (
-          <div className="flex items-center justify-center gap-3 pt-2 pb-4">
-            <button onClick={() => doSearch(page - 1)} disabled={page === 1} className="btn-secondary text-xs py-1.5 px-3">← Prev</button>
-            <span className="text-xs text-gray-500">Page {page} of {Math.ceil(total / 20)}</span>
-            <button onClick={() => doSearch(page + 1)} disabled={page >= Math.ceil(total / 20)} className="btn-secondary text-xs py-1.5 px-3">Next →</button>
-          </div>
-        )}
+        {searched && !loading && (<div className="flex items-center justify-between"><p className="text-sm font-medium text-gray-700">{total} result{total !== 1 ? 's' : ''}</p>{charged > 0 && <p className="text-xs text-gray-400">{charged} credit{charged !== 1 ? 's' : ''} used</p>}</div>)}
+        {loading && (<div className="flex flex-col items-center justify-center py-24 gap-3"><div className="w-8 h-8 border-2 border-brand-400 border-t-transparent rounded-full animate-spin" /><p className="text-sm text-gray-400">Loading tenders...</p></div>)}
+        {!loading && searched && results.length === 0 && (<div className="flex flex-col items-center justify-center py-20 gap-2 text-center"><p className="text-sm text-gray-500">No tenders found</p><p className="text-xs text-gray-400">Try removing filters or selecting a different province</p></div>)}
+        {!loading && results.map(t => (<TenderCard key={t.id} tender={t} showBadgeColor onView={(tender) => setSelectedTender(tender)} />))}
+        {total > 20 && !loading && (<div className="flex items-center justify-center gap-3 pt-2 pb-4"><button onClick={() => doSearch(page - 1)} disabled={page === 1} className="btn-secondary text-xs py-1.5 px-3">← Prev</button><span className="text-xs text-gray-500">Page {page} of {Math.ceil(total / 20)}</span><button onClick={() => doSearch(page + 1)} disabled={page >= Math.ceil(total / 20)} className="btn-secondary text-xs py-1.5 px-3">Next →</button></div>)}
       </div>
     </div>
   )
 
+  // ===========================================================================
+  // RENDER
+  // ===========================================================================
   return (
     <div className="flex flex-col overflow-hidden" style={{ height: 'calc(100vh - 0px)' }}>
       <div className="flex-shrink-0 bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <h1 className="text-base font-semibold text-gray-900">Search tenders</h1>
-          {searched && <p className="text-xs text-gray-400">{total} results{charged > 0 ? ` · ${charged} credit${charged !== 1 ? 's' : ''} used` : ''}</p>}
-        </div>
+        <div className="min-w-0"><h1 className="text-base font-semibold text-gray-900">Search tenders</h1>{searched && <p className="text-xs text-gray-400">{total} results{charged > 0 ? ` · ${charged} credit${charged !== 1 ? 's' : ''} used` : ''}</p>}</div>
         <div className="flex items-center gap-2 flex-shrink-0">
-          <button onClick={() => setShowMap(v => !v)} className={`hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs ${showMap ? 'bg-brand-50 border-brand-200 text-brand-700' : 'bg-white border-gray-200 text-gray-500'}`}>
-            {showMap ? <><Eye size={12} /> Map on</> : <><EyeOff size={12} /> Map off</>}
-          </button>
-          <button onClick={() => setShowFilters(v => !v)} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs ${showFilters ? 'bg-brand-50 border-brand-200 text-brand-700' : 'bg-white border-gray-200 text-gray-600'}`}>
-            <Filter size={12} /> Filters {filterCount > 0 && <span className="bg-brand-400 text-white rounded-full px-1.5 py-0.5 text-xs">{filterCount}</span>}
-          </button>
+          <button onClick={() => setShowMap(v => !v)} className={`hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs ${showMap ? 'bg-brand-50 border-brand-200 text-brand-700' : 'bg-white border-gray-200 text-gray-500'}`}>{showMap ? <><Eye size={12} /> Map on</> : <><EyeOff size={12} /> Map off</>}</button>
+          <button onClick={() => setShowFilters(v => !v)} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs ${showFilters ? 'bg-brand-50 border-brand-200 text-brand-700' : 'bg-white border-gray-200 text-gray-600'}`}><Filter size={12} /> Filters {filterCount > 0 && <span className="bg-brand-400 text-white rounded-full px-1.5 py-0.5 text-xs">{filterCount}</span>}</button>
         </div>
       </div>
 
       <div className="hidden md:flex flex-1 overflow-hidden">
         {showFilters && <div className="w-72 flex-shrink-0 border-r border-gray-200 overflow-hidden"><FiltersPanel /></div>}
         <div className="flex-1 flex overflow-hidden">
-          <div className={`flex flex-col overflow-hidden border-r border-gray-200 ${showMap ? 'w-[380px] flex-shrink-0' : 'flex-1'}`}>
-            <div className="flex-1 overflow-y-auto"><ResultsPanel /></div>
-          </div>
+          <div className={`flex flex-col overflow-hidden border-r border-gray-200 ${showMap ? 'w-[380px] flex-shrink-0' : 'flex-1'}`}><div className="flex-1 overflow-y-auto"><ResultsPanel /></div></div>
           {showMap && !selectedTender && <div className="flex-1 relative overflow-hidden"><TheMap scrollWheel /></div>}
-          {selectedTender && (
-            <div className="flex-1 relative overflow-hidden">
-              <TenderDetailView tender={selectedTender} onClose={() => setSelectedTender(null)} />
-            </div>
-          )}
+          {selectedTender && <div className="flex-1 relative overflow-hidden"><TenderDetailView tender={selectedTender} onClose={() => setSelectedTender(null)} /></div>}
         </div>
       </div>
 
       <div className="md:hidden flex-1 flex flex-col overflow-hidden">
         <div className="flex-shrink-0 flex border-b border-gray-200 bg-white">
           {[{ id: 'filters', label: 'Filters', badge: filterCount }, { id: 'results', label: total > 0 ? `Results (${total})` : 'Results' }, { id: 'map', label: 'Map' }].map(tab => (
-            <button key={tab.id} onClick={() => setMobileTab(tab.id)} className={`flex-1 flex items-center justify-center gap-1 py-3 text-xs font-medium border-b-2 ${mobileTab === tab.id ? 'border-brand-400 text-brand-600' : 'border-transparent text-gray-500'}`}>
-              {tab.label}{tab.badge > 0 && <span className="bg-brand-400 text-white rounded-full px-1.5 py-0.5 text-xs">{tab.badge}</span>}
-            </button>
+            <button key={tab.id} onClick={() => setMobileTab(tab.id)} className={`flex-1 flex items-center justify-center gap-1 py-3 text-xs font-medium border-b-2 ${mobileTab === tab.id ? 'border-brand-400 text-brand-600' : 'border-transparent text-gray-500'}`}>{tab.label}{tab.badge > 0 && <span className="bg-brand-400 text-white rounded-full px-1.5 py-0.5 text-xs">{tab.badge}</span>}</button>
           ))}
         </div>
         <div className="flex-1 overflow-hidden">
@@ -570,70 +652,6 @@ export default function Search() {
         .leaflet-control-zoom { border: 1px solid #e5e7eb !important; border-radius: 8px !important; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,.1) !important; }
         .leaflet-control-zoom a { color: #374151 !important; border-color: #e5e7eb !important; }
       `}</style>
-    </div>
-  )
-}
-
-// =============================================================================
-// HELPER: Detail Row for Tender View
-// =============================================================================
-function DetailRow({ label, value, valueClass }) {
-  if (!value) return null
-  return (
-    <div>
-      <p className="text-xs text-gray-400 uppercase tracking-wide mb-1">{label}</p>
-      <p className={valueClass || "text-sm text-gray-600"}>{value}</p>
-    </div>
-  )
-}
-
-// =============================================================================
-// HELPER: Tender Detail View (replaces map when tender selected)
-// =============================================================================
-function TenderDetailView({ tender, onClose }) {
-  if (!tender) return null
-  
-  return (
-    <div className="h-full flex flex-col bg-white">
-      <div className="flex items-start justify-between gap-3 px-5 py-4 border-b border-gray-200 bg-white flex-shrink-0">
-        <div className="min-w-0">
-          <h2 className="text-base font-semibold text-gray-900 leading-snug line-clamp-2">{tender.title}</h2>
-          <p className="text-sm text-gray-500 mt-0.5">
-            {[tender.issuing_body, tender.province ? ((tender.town ? tender.town + ', ' : '') + tender.province) : null, tender.closing_date ? ('Closes ' + tender.closing_date) : null].filter(Boolean).join(' • ')}
-          </p>
-        </div>
-        <button onClick={onClose} className="flex-shrink-0 p-1.5 rounded-lg hover:bg-gray-100 text-gray-500"><X size={18} /></button>
-      </div>
-      <div className="flex-1 overflow-y-auto p-5">
-        {(tender.document_url || tender.source_url) && (
-          <div className="mb-4">
-            <a href={tender.document_url || tender.source_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 px-4 py-2 bg-brand-400 hover:bg-brand-600 text-white rounded-lg text-sm font-medium"><ExternalLink size={15} /> Open tender document</a>
-          </div>
-        )}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <DetailRow label="Title" value={tender.title} />
-          <DetailRow label="Issuing Body" value={tender.issuing_body} />
-          <DetailRow label="Reference Number" value={tender.reference_number} />
-          <DetailRow label="Closing Date" value={tender.closing_date} valueClass="text-red-500 font-medium" />
-          <DetailRow label="Province" value={tender.province} />
-          <DetailRow label="Municipality" value={tender.municipality} />
-          <DetailRow label="Town" value={tender.town} />
-          <DetailRow label="Industry" value={tender.industry_category} />
-          <DetailRow label="Source" value={tender.source_site} />
-        </div>
-        {tender.description && (
-          <div className="mt-4">
-            <p className="text-xs text-gray-400 uppercase tracking-wide mb-2">Description</p>
-            <p className="text-sm text-gray-600 whitespace-pre-line">{tender.description}</p>
-          </div>
-        )}
-        {tender.contact_info && (
-          <div className="mt-4">
-            <p className="text-xs text-gray-400 uppercase tracking-wide mb-2">Contact Information</p>
-            <p className="text-sm text-gray-600">{tender.contact_info}</p>
-          </div>
-        )}
-      </div>
     </div>
   )
 }
