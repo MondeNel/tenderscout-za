@@ -1,4 +1,3 @@
-# MUST be first — fixes Windows ProactorEventLoop before uvicorn creates anything
 import sys
 if sys.platform == "win32":
     import asyncio
@@ -32,9 +31,10 @@ logger = logging.getLogger(__name__)
 # CONFIGURATION
 # =============================================================================
 
+# Allow all localhost ports for development, plus any custom origins from env
 ALLOWED_ORIGINS = os.getenv(
     "ALLOWED_ORIGINS", 
-    "http://localhost:5173,http://localhost:3000,http://localhost:8080"
+    "http://localhost:5173,http://localhost:3000,http://localhost:8080,http://localhost:4173"
 ).split(",")
 
 API_VERSION = "1.0.0"
@@ -51,6 +51,14 @@ South African government tender search and aggregation platform.
 async def lifespan(app: FastAPI):
     """
     Application lifespan manager.
+    
+    Startup:
+        - Create database tables if they don't exist
+        - Start the scraper scheduler
+        - Log current database statistics
+        
+    Shutdown:
+        - Gracefully stop the scheduler
     """
     # Startup
     logger.info("[MAIN] ═══════════════════════════════════════════════════════")
@@ -61,7 +69,7 @@ async def lifespan(app: FastAPI):
     models.Base.metadata.create_all(bind=engine)
     logger.info("[MAIN] Database tables ensured")
     
-    # Start the scraper scheduler
+    # Start the scraper scheduler (runs every 6 hours by default)
     start_scheduler()
     logger.info("[MAIN] Scraper scheduler started")
     
@@ -100,8 +108,16 @@ app = FastAPI(
 )
 
 # =============================================================================
-# CORS MIDDLEWARE
+# CORS MIDDLEWARE (FIXED)
 # =============================================================================
+# The order of middleware matters — CORS should be added before other middleware.
+# 
+# Key settings:
+#   - allow_origins: List of allowed frontend URLs
+#   - allow_credentials: Required for cookies/auth headers
+#   - allow_methods: ["*"] allows all HTTP methods (GET, POST, PUT, DELETE, OPTIONS)
+#   - allow_headers: ["*"] allows all request headers
+#   - expose_headers: ["*"] allows frontend to read all response headers
 
 app.add_middleware(
     CORSMiddleware,
@@ -109,6 +125,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 # =============================================================================
@@ -143,6 +160,11 @@ def root():
 def health():
     """
     Health check endpoint.
+    
+    Returns:
+        - API status
+        - Database connection status
+        - Total and active tender counts
     """
     from database import SessionLocal
     db = SessionLocal()
@@ -177,6 +199,8 @@ def health():
 def scraper_status():
     """
     Get status of all scraper sources.
+    
+    Returns list of scraper statuses with health information.
     """
     from database import SessionLocal
     db = SessionLocal()
@@ -203,6 +227,8 @@ def scraper_status():
 async def trigger_scrape(background_tasks: BackgroundTasks):
     """
     Manually trigger a full scraper run.
+    
+    The scrape runs in the background and does not block the response.
     """
     from scraper.engine import run_scraper
     
@@ -225,8 +251,10 @@ def scheduler_status():
 
 
 # =============================================================================
-# ERROR HANDLERS — FIXED: Return JSONResponse, not dict
+# ERROR HANDLERS
 # =============================================================================
+# Must return JSONResponse objects, not plain dictionaries.
+# Plain dicts cause: TypeError: 'dict' object is not callable
 
 @app.exception_handler(404)
 async def not_found_handler(request, exc):
