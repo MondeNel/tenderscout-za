@@ -1,6 +1,8 @@
 /**
  * File: src/pages/Search.jsx
  * Purpose: Advanced Tender Search Page with Interactive Map
+ * 
+ * Map auto-zooms to user's province on first visit.
  */
 
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
@@ -35,6 +37,7 @@ const SA_BOUNDS = [[-35.5, 16.2], [-22.0, 33.0]]
 const SA_CENTER = [-29.0, 25.0]
 const SA_ZOOM = 5
 const PROV_ZOOM = 7
+const TOWN_ZOOM = 10
 
 // =============================================================================
 // FILTER OPTIONS
@@ -138,6 +141,7 @@ export default function Search() {
   const [mapData, setMapData] = useState({ districts: [], total: 0 })
   const [mapLoading, setMapLoading] = useState(false)
   const [activePop, setActivePop] = useState(null)
+  const [selectedTender, setSelectedTender] = useState(null)
 
   const [results, setResults] = useState([])
   const [total, setTotal] = useState(0)
@@ -149,10 +153,34 @@ export default function Search() {
   const [showFilters, setShowFilters] = useState(true)
   const [mobileTab, setMobileTab] = useState('filters')
 
+  // Track if initial load has happened
+  const initialLoadDone = useRef(false)
+
   const tog = (list, set, v) =>
     set(list.includes(v) ? list.filter(x => x !== v) : [...list, v])
 
   const filterCount = selInd.length + selProv.length + selMunis.length + (useMyLoc && userLoc ? 1 : 0)
+
+  // ===========================================================================
+  // MAP CENTER - Based on user's saved location
+  // ===========================================================================
+  
+  const mapCenter = useMemo(() => {
+    if (user?.business_lat && user?.business_lng) {
+      return [user.business_lat, user.business_lng]
+    }
+    const up = user?.province_preferences?.[0] || selProv[0]
+    if (up && PROVINCE_CENTERS[up]) {
+      return PROVINCE_CENTERS[up]
+    }
+    return SA_CENTER
+  }, [user, selProv])
+
+  const mapZoom = useMemo(() => {
+    if (user?.business_lat && user?.business_lng) return TOWN_ZOOM
+    if ((user?.province_preferences?.[0] || selProv[0]) && PROVINCE_CENTERS[user?.province_preferences?.[0] || selProv[0]]) return PROV_ZOOM
+    return SA_ZOOM
+  }, [user, selProv])
 
   const handleProvToggle = (prov) => {
     const adding = !selProv.includes(prov)
@@ -205,10 +233,23 @@ export default function Search() {
 
   useEffect(() => { fetchMapData() }, [fetchMapData])
 
+  // ===========================================================================
+  // INITIAL LOAD - Auto-zoom to user's province & load preferences
+  // ===========================================================================
   useEffect(() => {
-    if (!user) return
+    if (!user || initialLoadDone.current) return
+    initialLoadDone.current = true
+    
     const indPref = user.industry_preferences || []
     const provPref = user.province_preferences || []
+    
+    // Auto-zoom map to user's province
+    if (provPref.length > 0 && PROVINCE_CENTERS[provPref[0]]) {
+      setFlyTarget({ c: PROVINCE_CENTERS[provPref[0]], z: PROV_ZOOM, key: 'user-prov' + Date.now() })
+    } else if (user?.business_lat && user?.business_lng) {
+      setFlyTarget({ c: [user.business_lat, user.business_lng], z: TOWN_ZOOM, key: 'user-town' + Date.now() })
+    }
+    
     doSearch(1, indPref, provPref, [], '')
   }, [user?.id])
 
@@ -258,7 +299,6 @@ export default function Search() {
     )
   , [mapData, selProv])
 
-  // Group search results by location for cleaner map pins
   const groupedLocations = useMemo(() => groupTendersByLocation(results), [results])
 
   const TheMap = ({ scrollWheel = true }) => (
@@ -292,20 +332,22 @@ export default function Search() {
         </div>
       </div>
 
-      <MapContainer center={SA_CENTER} zoom={SA_ZOOM} maxBounds={SA_BOUNDS} maxBoundsViscosity={1.0} minZoom={5} maxZoom={14}
+      <MapContainer center={mapCenter} zoom={mapZoom} maxBounds={SA_BOUNDS} maxBoundsViscosity={1.0} minZoom={5} maxZoom={14}
         style={{ height: '100%', width: '100%' }} scrollWheelZoom={scrollWheel}>
         <TileLayer attribution='© <a href="https://www.openstreetmap.org">OpenStreetMap</a>' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" bounds={SA_BOUNDS} />
         <FlyCtrl target={flyTarget} />
 
+        {/* User location marker (always show if user has coordinates) */}
+        {user?.business_lat && user?.business_lng && (
+          <Marker position={[user.business_lat, user.business_lng]}
+            icon={L.divIcon({ html: `<div style="width:14px;height:14px;background:#1D9E75;border:3px solid white;border-radius:50%;box-shadow:0 0 0 4px rgba(29,158,117,.2)"></div>`, iconSize: [14,14], iconAnchor: [7,7] })}>
+            <Popup><strong>{user.business_location || 'Your location'}</strong></Popup>
+          </Marker>
+        )}
+
         {useMyLoc && userLoc && (
-          <>
-            <Marker position={[userLoc.lat, userLoc.lng]}
-              icon={L.divIcon({ html: `<div style="width:14px;height:14px;background:#1D9E75;border:3px solid white;border-radius:50%;box-shadow:0 0 0 4px rgba(29,158,117,.2)"></div>`, iconSize: [14,14], iconAnchor: [7,7] })}>
-              <Popup><strong>{userLoc.name}</strong><br />Your business location</Popup>
-            </Marker>
-            <Circle center={[userLoc.lat, userLoc.lng]} radius={radiusKm * 1000}
-              pathOptions={{ color: '#1D9E75', fillColor: '#1D9E75', fillOpacity: .05, weight: 1.5, dashArray: '5 5' }} />
-          </>
+          <Circle center={[userLoc.lat, userLoc.lng]} radius={radiusKm * 1000}
+            pathOptions={{ color: '#1D9E75', fillColor: '#1D9E75', fillOpacity: .05, weight: 1.5, dashArray: '5 5' }} />
         )}
 
         {/* District Markers */}
@@ -346,17 +388,13 @@ export default function Search() {
           )
         })}
 
-        {/* =================================================================
-            GROUPED LOCATION PINS (with tender counts in header)
-            ================================================================= */}
+        {/* Grouped Location Pins */}
         {groupedLocations.map((group, index) => {
           const iconConfig = createGroupedMarkerIcon(group.count, group.type)
-          
           return (
             <Marker key={`group-${index}`} position={[group.lat, group.lng]} icon={L.divIcon(iconConfig)}>
               <Popup maxWidth={300} minWidth={250}>
                 <div>
-                  {/* Header with location name and tender count */}
                   <div className="flex items-center justify-between mb-2 pb-2 border-b border-gray-100">
                     <div>
                       <p className="text-sm font-semibold text-gray-900">{group.name}</p>
@@ -366,8 +404,6 @@ export default function Search() {
                       {group.count} tender{group.count !== 1 ? 's' : ''}
                     </span>
                   </div>
-                  
-                  {/* Tender list */}
                   <div className="space-y-1.5 max-h-52 overflow-y-auto">
                     {group.tenders.slice(0, 5).map((t, i) => (
                       <div key={i} className="flex items-start gap-2 p-2 bg-gray-50 rounded-lg">
@@ -379,8 +415,6 @@ export default function Search() {
                       </div>
                     ))}
                   </div>
-                  
-                  {/* Footer with "+X more" if needed */}
                   {group.count > 5 && (
                     <p className="text-xs text-gray-400 mt-2 pt-2 border-t border-gray-100">
                       +{group.count - 5} more tender{group.count - 5 !== 1 ? 's' : ''}
@@ -468,7 +502,9 @@ export default function Search() {
             <p className="text-xs text-gray-400">Try removing filters or selecting a different province</p>
           </div>
         )}
-        {!loading && results.map(t => <TenderCard key={t.id} tender={t} showBadgeColor />)}
+        {!loading && results.map(t => (
+          <TenderCard key={t.id} tender={t} showBadgeColor onView={(tender) => setSelectedTender(tender)} />
+        ))}
         {total > 20 && !loading && (
           <div className="flex items-center justify-center gap-3 pt-2 pb-4">
             <button onClick={() => doSearch(page - 1)} disabled={page === 1} className="btn-secondary text-xs py-1.5 px-3">← Prev</button>
@@ -503,7 +539,12 @@ export default function Search() {
           <div className={`flex flex-col overflow-hidden border-r border-gray-200 ${showMap ? 'w-[380px] flex-shrink-0' : 'flex-1'}`}>
             <div className="flex-1 overflow-y-auto"><ResultsPanel /></div>
           </div>
-          {showMap && <div className="flex-1 relative overflow-hidden"><TheMap scrollWheel /></div>}
+          {showMap && !selectedTender && <div className="flex-1 relative overflow-hidden"><TheMap scrollWheel /></div>}
+          {selectedTender && (
+            <div className="flex-1 relative overflow-hidden">
+              <TenderDetailView tender={selectedTender} onClose={() => setSelectedTender(null)} />
+            </div>
+          )}
         </div>
       </div>
 
@@ -529,6 +570,70 @@ export default function Search() {
         .leaflet-control-zoom { border: 1px solid #e5e7eb !important; border-radius: 8px !important; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,.1) !important; }
         .leaflet-control-zoom a { color: #374151 !important; border-color: #e5e7eb !important; }
       `}</style>
+    </div>
+  )
+}
+
+// =============================================================================
+// HELPER: Detail Row for Tender View
+// =============================================================================
+function DetailRow({ label, value, valueClass }) {
+  if (!value) return null
+  return (
+    <div>
+      <p className="text-xs text-gray-400 uppercase tracking-wide mb-1">{label}</p>
+      <p className={valueClass || "text-sm text-gray-600"}>{value}</p>
+    </div>
+  )
+}
+
+// =============================================================================
+// HELPER: Tender Detail View (replaces map when tender selected)
+// =============================================================================
+function TenderDetailView({ tender, onClose }) {
+  if (!tender) return null
+  
+  return (
+    <div className="h-full flex flex-col bg-white">
+      <div className="flex items-start justify-between gap-3 px-5 py-4 border-b border-gray-200 bg-white flex-shrink-0">
+        <div className="min-w-0">
+          <h2 className="text-base font-semibold text-gray-900 leading-snug line-clamp-2">{tender.title}</h2>
+          <p className="text-sm text-gray-500 mt-0.5">
+            {[tender.issuing_body, tender.province ? ((tender.town ? tender.town + ', ' : '') + tender.province) : null, tender.closing_date ? ('Closes ' + tender.closing_date) : null].filter(Boolean).join(' • ')}
+          </p>
+        </div>
+        <button onClick={onClose} className="flex-shrink-0 p-1.5 rounded-lg hover:bg-gray-100 text-gray-500"><X size={18} /></button>
+      </div>
+      <div className="flex-1 overflow-y-auto p-5">
+        {(tender.document_url || tender.source_url) && (
+          <div className="mb-4">
+            <a href={tender.document_url || tender.source_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 px-4 py-2 bg-brand-400 hover:bg-brand-600 text-white rounded-lg text-sm font-medium"><ExternalLink size={15} /> Open tender document</a>
+          </div>
+        )}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <DetailRow label="Title" value={tender.title} />
+          <DetailRow label="Issuing Body" value={tender.issuing_body} />
+          <DetailRow label="Reference Number" value={tender.reference_number} />
+          <DetailRow label="Closing Date" value={tender.closing_date} valueClass="text-red-500 font-medium" />
+          <DetailRow label="Province" value={tender.province} />
+          <DetailRow label="Municipality" value={tender.municipality} />
+          <DetailRow label="Town" value={tender.town} />
+          <DetailRow label="Industry" value={tender.industry_category} />
+          <DetailRow label="Source" value={tender.source_site} />
+        </div>
+        {tender.description && (
+          <div className="mt-4">
+            <p className="text-xs text-gray-400 uppercase tracking-wide mb-2">Description</p>
+            <p className="text-sm text-gray-600 whitespace-pre-line">{tender.description}</p>
+          </div>
+        )}
+        {tender.contact_info && (
+          <div className="mt-4">
+            <p className="text-xs text-gray-400 uppercase tracking-wide mb-2">Contact Information</p>
+            <p className="text-sm text-gray-600">{tender.contact_info}</p>
+          </div>
+        )}
+      </div>
     </div>
   )
 }
