@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, desc
 from database import get_db
@@ -13,10 +13,6 @@ CREDITS_PER_RESULT = float(os.getenv("CREDITS_PER_RESULT", 1))
 # ---------------------------------------------------------------------------
 # Industry alias map
 # ---------------------------------------------------------------------------
-# Frontend uses old names (from legacy utils.py).
-# DB now has new names (from updated utils.py).
-# This map lets both work transparently.
-
 _INDUSTRY_ALIASES: dict = {
     # Old → new
     "Security Services":     ["Security, Access, Alarms & Fire"],
@@ -82,32 +78,55 @@ def search_tenders(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(auth_utils.get_current_user)
 ):
-    max_credits = request.page_size * CREDITS_PER_RESULT
-    if current_user.credit_balance < max_credits:
+    # -------------------------------------------------------------------------
+    # FIX: Credit check — use actual balance vs minimum viable amount (1 credit)
+    # -------------------------------------------------------------------------
+    # Old bug: checked page_size * rate upfront (e.g. 20 credits for page_size=20)
+    # even when the query might return 0–3 results. A user with 5 credits and
+    # page_size=20 would always get a 402 even though they can afford the results.
+    #
+    # New behaviour: require at least 1 credit to attempt the search.
+    # Actual charge happens after results are fetched, based on real result count.
+    if current_user.credit_balance < CREDITS_PER_RESULT:
         raise HTTPException(
             status_code=402,
-            detail=f"Insufficient credits. Need up to {max_credits}, have {current_user.credit_balance}"
+            detail={
+                "message": "Insufficient credits. Please top up to continue searching.",
+                "balance": current_user.credit_balance,
+                "required": CREDITS_PER_RESULT,
+                "topup_url": "/credits/topup",
+            }
         )
 
+    # -------------------------------------------------------------------------
+    # Base query — active tenders only
+    # -------------------------------------------------------------------------
     query = db.query(models.Tender).filter(models.Tender.is_active == True)
 
+    # -------------------------------------------------------------------------
+    # Filters
+    # -------------------------------------------------------------------------
     if request.industries:
         resolved = _resolve_industries(request.industries)
         query = query.filter(
             or_(*[models.Tender.industry_category.ilike(f"%{i}%") for i in resolved])
         )
+
     if request.provinces:
         query = query.filter(
             or_(*[models.Tender.province.ilike(f"%{p}%") for p in request.provinces])
         )
+
     if request.municipalities:
         query = query.filter(
             or_(*[models.Tender.municipality.ilike(f"%{m}%") for m in request.municipalities])
         )
+
     if request.towns:
         query = query.filter(
             or_(*[models.Tender.town.ilike(f"%{t}%") for t in request.towns])
         )
+
     if request.keyword:
         kw = f"%{request.keyword}%"
         query = query.filter(or_(
@@ -116,6 +135,9 @@ def search_tenders(
             models.Tender.issuing_body.ilike(kw),
         ))
 
+    # -------------------------------------------------------------------------
+    # Radius filter (in-memory haversine) vs standard DB pagination
+    # -------------------------------------------------------------------------
     use_radius = (
         request.user_lat is not None
         and request.user_lng is not None
@@ -132,12 +154,17 @@ def search_tenders(
                 if d <= request.radius_km:
                     filtered.append((t, d))
             else:
-                filtered.append((t, 99999))  # soft-include uncoordinated tenders
+                # Soft-include tenders with no coordinates (sorted to the end)
+                filtered.append((t, 99999))
+
         filtered.sort(key=lambda x: (x[1] == 99999, x[1]))
-        total     = len(filtered)
-        page_items = [t for t, _ in filtered[(request.page - 1) * request.page_size: request.page * request.page_size]]
+        total = len(filtered)
+        page_items = [
+            t for t, _ in
+            filtered[(request.page - 1) * request.page_size: request.page * request.page_size]
+        ]
     else:
-        total      = query.count()
+        total = query.count()
         page_items = (
             query.order_by(desc(models.Tender.scraped_at))
             .offset((request.page - 1) * request.page_size)
@@ -145,29 +172,36 @@ def search_tenders(
             .all()
         )
 
-    credits_charged = len(page_items) * CREDITS_PER_RESULT
+    # -------------------------------------------------------------------------
+    # FIX: Charge based on actual results returned, not page_size
+    # Also cap charge so user can't go negative
+    # -------------------------------------------------------------------------
+    credits_charged = min(
+        len(page_items) * CREDITS_PER_RESULT,
+        current_user.credit_balance  # never charge more than they have
+    )
     current_user.credit_balance -= credits_charged
 
     db.add(models.Transaction(
-        user_id          = current_user.id,
-        amount           = credits_charged,
-        transaction_type = "debit",
-        description      = f"Search: {len(page_items)} results",
+        user_id=current_user.id,
+        amount=credits_charged,
+        transaction_type="debit",
+        description=f"Search: {len(page_items)} results",
     ))
     db.add(models.SearchLog(
-        user_id         = current_user.id,
-        query_params    = {
-            "industries":    request.industries,
-            "provinces":     request.provinces,
-            "municipalities":request.municipalities,
-            "towns":         request.towns,
-            "keyword":       request.keyword,
-            "user_lat":      request.user_lat,
-            "user_lng":      request.user_lng,
-            "radius_km":     request.radius_km,
+        user_id=current_user.id,
+        query_params={
+            "industries":     request.industries,
+            "provinces":      request.provinces,
+            "municipalities": request.municipalities,
+            "towns":          request.towns,
+            "keyword":        request.keyword,
+            "user_lat":       request.user_lat,
+            "user_lng":       request.user_lng,
+            "radius_km":      request.radius_km,
         },
-        result_count    = len(page_items),
-        credits_charged = credits_charged,
+        result_count=len(page_items),
+        credits_charged=credits_charged,
     ))
     db.commit()
 

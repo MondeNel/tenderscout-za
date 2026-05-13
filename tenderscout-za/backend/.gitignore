@@ -1,3 +1,26 @@
-The AT command has been deprecated. Please use schtasks.exe instead.
+# Database
+*.db
+*.sqlite
+*.sqlite3
 
-The request is not supported.
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.env
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Test outputs
+*.json
+debug.html
+*_output*

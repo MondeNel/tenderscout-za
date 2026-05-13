@@ -3,9 +3,11 @@ if sys.platform == "win32":
     import asyncio
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-from fastapi import FastAPI, BackgroundTasks
+from fastapi import FastAPI, BackgroundTasks, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from contextlib import asynccontextmanager
 import logging
 import os
@@ -31,11 +33,11 @@ logger = logging.getLogger(__name__)
 # CONFIGURATION
 # =============================================================================
 
-# Allow all localhost ports for development, plus any custom origins from env
-ALLOWED_ORIGINS = os.getenv(
-    "ALLOWED_ORIGINS", 
-    "http://localhost:5173,http://localhost:3000,http://localhost:8080,http://localhost:4173"
-).split(",")
+# Strip whitespace from each origin — a trailing space causes silent CORS failures
+ALLOWED_ORIGINS = [o.strip() for o in os.getenv(
+    "ALLOWED_ORIGINS",
+    "http://localhost:5173,http://localhost:3000,http://localhost:8080"
+).split(",")]
 
 API_VERSION = "1.0.0"
 API_TITLE = "TenderScout ZA"
@@ -49,46 +51,41 @@ South African government tender search and aggregation platform.
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    Application lifespan manager.
-    
-    Startup:
-        - Create database tables if they don't exist
-        - Start the scraper scheduler
-        - Log current database statistics
-        
-    Shutdown:
-        - Gracefully stop the scheduler
-    """
-    # Startup
     logger.info("[MAIN] ═══════════════════════════════════════════════════════")
     logger.info(f"[MAIN] Starting {API_TITLE} v{API_VERSION}")
+    logger.info(f"[MAIN] Accepting CORS origins: {ALLOWED_ORIGINS}")
     logger.info("[MAIN] ═══════════════════════════════════════════════════════")
-    
-    # Ensure database tables exist
-    models.Base.metadata.create_all(bind=engine)
-    logger.info("[MAIN] Database tables ensured")
-    
-    # Start the scraper scheduler (runs every 6 hours by default)
-    start_scheduler()
-    logger.info("[MAIN] Scraper scheduler started")
-    
-    # Log initial database stats
+
+    try:
+        models.Base.metadata.create_all(bind=engine)
+        logger.info("[MAIN] Database tables ensured")
+    except Exception as e:
+        logger.error(f"[MAIN] ❌ Database init failed: {e}")
+        raise
+
+    try:
+        start_scheduler()
+        logger.info("[MAIN] Scraper scheduler started")
+    except Exception as e:
+        logger.error(f"[MAIN] ❌ Scheduler failed to start: {e}")
+        raise
+
     from database import SessionLocal
     db = SessionLocal()
     try:
-        total = db.query(models.Tender).count()
-        active = db.query(models.Tender).filter(models.Tender.is_active == True).count()
+        total   = db.query(models.Tender).count()
+        active  = db.query(models.Tender).filter(models.Tender.is_active == True).count()
         sources = db.query(models.ScraperStatus).count()
-        logger.info(f"[MAIN] Database contains {total} tenders ({active} active) from {sources} sources")
+        logger.info(f"[MAIN] DB: {total} tenders ({active} active) from {sources} sources")
+    except Exception as e:
+        logger.warning(f"[MAIN] Could not read initial DB stats: {e}")
     finally:
         db.close()
-    
+
     logger.info("[MAIN] ✅ TenderScout ZA is ready to serve requests")
-    
-    yield  # Application runs here
-    
-    # Shutdown
+
+    yield
+
     logger.info("[MAIN] Shutting down...")
     stop_scheduler()
     logger.info("[MAIN] ✅ TenderScout ZA stopped")
@@ -108,16 +105,17 @@ app = FastAPI(
 )
 
 # =============================================================================
-# CORS MIDDLEWARE (FIXED)
+# CORS MIDDLEWARE
 # =============================================================================
-# The order of middleware matters — CORS should be added before other middleware.
-# 
-# Key settings:
-#   - allow_origins: List of allowed frontend URLs
-#   - allow_credentials: Required for cookies/auth headers
-#   - allow_methods: ["*"] allows all HTTP methods (GET, POST, PUT, DELETE, OPTIONS)
-#   - allow_headers: ["*"] allows all request headers
-#   - expose_headers: ["*"] allows frontend to read all response headers
+# ⚠️  MUST be registered before any other middleware or auth logic.
+#
+# Root cause of the original CORS error:
+#   Browser sends a preflight OPTIONS request → auth dependency runs first →
+#   throws 401 → FastAPI returns the error with NO CORS headers →
+#   browser blocks the actual request before it even fires.
+#
+# With CORSMiddleware registered first, OPTIONS requests are intercepted and
+# answered with the correct headers before any route handler or dependency runs.
 
 app.add_middleware(
     CORSMiddleware,
@@ -146,7 +144,6 @@ app.include_router(proxy_router)
 
 @app.get("/")
 def root():
-    """Root endpoint — returns API information."""
     return {
         "name": API_TITLE,
         "version": API_VERSION,
@@ -158,20 +155,11 @@ def root():
 
 @app.get("/health")
 def health():
-    """
-    Health check endpoint.
-    
-    Returns:
-        - API status
-        - Database connection status
-        - Total and active tender counts
-    """
     from database import SessionLocal
     db = SessionLocal()
     try:
-        total = db.query(models.Tender).count()
+        total  = db.query(models.Tender).count()
         active = db.query(models.Tender).filter(models.Tender.is_active == True).count()
-        
         return {
             "status": "healthy",
             "database": "connected",
@@ -181,12 +169,15 @@ def health():
         }
     except Exception as e:
         logger.error(f"[MAIN] Health check failed: {e}")
-        return {
-            "status": "unhealthy",
-            "database": "disconnected",
-            "error": str(e),
-            "timestamp": datetime.utcnow().isoformat(),
-        }
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "unhealthy",
+                "database": "disconnected",
+                "error": str(e),
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+        )
     finally:
         db.close()
 
@@ -197,25 +188,19 @@ def health():
 
 @app.get("/admin/scraper-status")
 def scraper_status():
-    """
-    Get status of all scraper sources.
-    
-    Returns list of scraper statuses with health information.
-    """
     from database import SessionLocal
     db = SessionLocal()
     try:
         rows = db.query(models.ScraperStatus).order_by(
             models.ScraperStatus.last_scraped_at.desc()
         ).all()
-        
         return [
             {
-                "site": s.site_name,
+                "site":         s.site_name,
                 "last_scraped": s.last_scraped_at.isoformat() if s.last_scraped_at else None,
                 "result_count": s.last_result_count,
-                "is_healthy": s.is_healthy,
-                "last_error": s.last_error,
+                "is_healthy":   s.is_healthy,
+                "last_error":   s.last_error,
             }
             for s in rows
         ]
@@ -225,16 +210,9 @@ def scraper_status():
 
 @app.post("/admin/trigger-scrape")
 async def trigger_scrape(background_tasks: BackgroundTasks):
-    """
-    Manually trigger a full scraper run.
-    
-    The scrape runs in the background and does not block the response.
-    """
     from scraper.engine import run_scraper
-    
     background_tasks.add_task(run_scraper)
     logger.info("[MAIN] Manual scraper run triggered via admin endpoint")
-    
     return {
         "status": "scrape triggered",
         "message": "Scraper is running in the background.",
@@ -244,43 +222,78 @@ async def trigger_scrape(background_tasks: BackgroundTasks):
 
 @app.get("/admin/scheduler-status")
 def scheduler_status():
-    """
-    Get the current status of the scraper scheduler.
-    """
     return get_scheduler_status()
 
 
 # =============================================================================
 # ERROR HANDLERS
 # =============================================================================
-# Must return JSONResponse objects, not plain dictionaries.
-# Plain dicts cause: TypeError: 'dict' object is not callable
+# ⚠️  FastAPI's CORSMiddleware only attaches Access-Control-* headers to
+# responses that flow through it normally. When an HTTPException is raised
+# inside a route (401, 402, 422, etc.), FastAPI's built-in exception handler
+# short-circuits and returns the response directly — bypassing the middleware
+# stack — so no CORS headers are attached.
+#
+# The fix: override the global HTTPException handler so every error response
+# manually injects the correct CORS headers. This covers 401 (bad token),
+# 402 (insufficient credits), 422 (validation), and anything else.
 
-@app.exception_handler(404)
-async def not_found_handler(request, exc):
-    """Custom 404 handler."""
+def _cors_headers(request: Request) -> dict:
+    """Return CORS headers matching the request's Origin, if allowed."""
+    origin = request.headers.get("origin", "")
+    allowed = origin if origin in ALLOWED_ORIGINS else (
+        ALLOWED_ORIGINS[0] if ALLOWED_ORIGINS else "*"
+    )
+    return {
+        "Access-Control-Allow-Origin":      allowed,
+        "Access-Control-Allow-Credentials": "true",
+        "Access-Control-Allow-Methods":     "GET, POST, PUT, DELETE, OPTIONS",
+        "Access-Control-Allow-Headers":     "Authorization, Content-Type",
+        "Vary":                             "Origin",
+    }
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    """Catch ALL HTTP exceptions and re-attach CORS headers."""
+    logger.warning(f"[MAIN] HTTP {exc.status_code} on {request.method} {request.url}: {exc.detail}")
     return JSONResponse(
-        status_code=404,
+        status_code=exc.status_code,
         content={
-            "error": "Not Found",
-            "message": "The requested resource was not found",
-            "path": str(request.url),
+            "error":     exc.detail,
+            "status":    exc.status_code,
             "timestamp": datetime.utcnow().isoformat(),
-        }
+        },
+        headers=_cors_headers(request),
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Catch Pydantic validation errors (422) and attach CORS headers."""
+    logger.warning(f"[MAIN] Validation error on {request.method} {request.url}: {exc.errors()}")
+    return JSONResponse(
+        status_code=422,
+        content={
+            "error":     "Validation Error",
+            "detail":    exc.errors(),
+            "timestamp": datetime.utcnow().isoformat(),
+        },
+        headers=_cors_headers(request),
     )
 
 
 @app.exception_handler(500)
-async def internal_error_handler(request, exc):
-    """Custom 500 handler."""
+async def internal_error_handler(request: Request, exc):
     logger.error(f"[MAIN] Internal server error: {exc}")
     return JSONResponse(
         status_code=500,
         content={
-            "error": "Internal Server Error",
-            "message": "An unexpected error occurred",
+            "error":     "Internal Server Error",
+            "message":   "An unexpected error occurred",
             "timestamp": datetime.utcnow().isoformat(),
-        }
+        },
+        headers=_cors_headers(request),
     )
 
 
@@ -290,13 +303,13 @@ async def internal_error_handler(request, exc):
 
 if __name__ == "__main__":
     import uvicorn
-    
-    port = int(os.getenv("PORT", "8000"))
-    host = os.getenv("HOST", "0.0.0.0")
+
+    port   = int(os.getenv("PORT", "8000"))
+    host   = os.getenv("HOST", "0.0.0.0")
     reload = os.getenv("RELOAD", "false").lower() == "true"
-    
+
     logger.info(f"[MAIN] Starting uvicorn server on {host}:{port}")
-    
+
     uvicorn.run(
         "main:app",
         host=host,
