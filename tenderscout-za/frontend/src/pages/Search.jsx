@@ -1,19 +1,11 @@
 /**
  * File: src/pages/Search.jsx
  * Purpose: Advanced Tender Search Page with Interactive Map
- * 
- * Features:
- *   - OSM HOT tiles showing roads, town names, and routes
- *   - Auto-zooms to user's province on first visit
- *   - Red location pins for tenders
- *   - Driving route lines from user to tender locations
- *   - Route lines via OSRM (Open Source Routing Machine)
- *   - Mobile responsive with validated coordinates
  */
 
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
 import { useAuth } from '../context/AuthContext'
-import { searchTenders } from '../api/tenders'
+import { searchTenders, getLatest } from '../api/tenders'
 import { getMunicipalities, SA_LOCATIONS, groupTendersByLocation, createGroupedMarkerIcon, getTenderCoordinates, getRoute } from '../data/saLocations'
 import TenderCard from '../components/TenderCard'
 import {
@@ -45,9 +37,6 @@ const SA_ZOOM = 6
 const PROV_ZOOM = 9
 const TOWN_ZOOM = 12
 
-// =============================================================================
-// MAP TILE PROVIDER — OSM HOT (shows roads, towns, routes clearly)
-// =============================================================================
 const MAP_TILE_URL = "https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png"
 const MAP_ATTRIBUTION = '© <a href="https://www.openstreetmap.org">OpenStreetMap</a> contributors'
 
@@ -77,7 +66,7 @@ const PROVINCE_CENTERS = {
 }
 
 // =============================================================================
-// HELPER: Validate coordinates before using
+// HELPERS
 // =============================================================================
 function isValidCoord(lat, lng) {
   if (lat === undefined || lng === undefined) return false
@@ -95,9 +84,6 @@ function safeCenter(center) {
   return isValidCoord(lat, lng) ? [lat, lng] : SA_CENTER
 }
 
-// =============================================================================
-// HELPER: District marker with tender count (RED theme)
-// =============================================================================
 function makeDistrictIcon(count, sel = false) {
   const s = count > 100 ? 52 : count > 50 ? 46 : count > 20 ? 40 : count > 5 ? 34 : 28
   const bg = sel ? '#991B1B' : count > 100 ? '#DC2626' : count > 50 ? '#EF4444'
@@ -117,36 +103,23 @@ function makeDistrictIcon(count, sel = false) {
   })
 }
 
-// =============================================================================
-// HELPER: Map fly-to controller (SAFE — validates all coordinates)
-// =============================================================================
 function FlyCtrl({ target }) {
   const map = useMap()
   const prev = useRef(null)
-  
   useEffect(() => {
     if (!target || !target.c) return
     if (!Array.isArray(target.c) || target.c.length !== 2) return
-    
     const [lat, lng] = target.c.map(Number)
     if (!isValidCoord(lat, lng)) return
-    
     if (target.key !== prev.current) {
       prev.current = target.key
-      try {
-        map.flyTo([lat, lng], target.z || 6, { duration: 0.85 })
-      } catch (e) {
-        console.warn('FlyTo failed:', e)
-      }
+      try { map.flyTo([lat, lng], target.z || 6, { duration: 0.85 }) }
+      catch (e) { console.warn('FlyTo failed:', e) }
     }
   }, [target?.key, target?.c, target?.z, map])
-  
   return null
 }
 
-// =============================================================================
-// HELPER: Toggle chip component
-// =============================================================================
 function Chip({ label, selected, onClick, small = false }) {
   return (
     <button onClick={onClick}
@@ -160,9 +133,6 @@ function Chip({ label, selected, onClick, small = false }) {
   )
 }
 
-// =============================================================================
-// HELPER: Detail Row for Tender View
-// =============================================================================
 function DetailRow({ label, value, valueClass }) {
   if (!value) return null
   return (
@@ -173,9 +143,6 @@ function DetailRow({ label, value, valueClass }) {
   )
 }
 
-// =============================================================================
-// HELPER: Tender Detail View (replaces map when tender selected)
-// =============================================================================
 function TenderDetailView({ tender, onClose }) {
   if (!tender) return null
   return (
@@ -192,7 +159,10 @@ function TenderDetailView({ tender, onClose }) {
       <div className="flex-1 overflow-y-auto p-5">
         {(tender.document_url || tender.source_url) && (
           <div className="mb-4">
-            <a href={tender.document_url || tender.source_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 px-4 py-2 bg-brand-400 hover:bg-brand-600 text-white rounded-lg text-sm font-medium"><ExternalLink size={15} /> Open tender document</a>
+            <a href={tender.document_url || tender.source_url} target="_blank" rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 px-4 py-2 bg-brand-400 hover:bg-brand-600 text-white rounded-lg text-sm font-medium">
+              <ExternalLink size={15} /> Open tender document
+            </a>
           </div>
         )}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -207,10 +177,16 @@ function TenderDetailView({ tender, onClose }) {
           <DetailRow label="Source" value={tender.source_site} />
         </div>
         {tender.description && (
-          <div className="mt-4"><p className="text-xs text-gray-400 uppercase tracking-wide mb-2">Description</p><p className="text-sm text-gray-600 whitespace-pre-line">{tender.description}</p></div>
+          <div className="mt-4">
+            <p className="text-xs text-gray-400 uppercase tracking-wide mb-2">Description</p>
+            <p className="text-sm text-gray-600 whitespace-pre-line">{tender.description}</p>
+          </div>
         )}
         {tender.contact_info && (
-          <div className="mt-4"><p className="text-xs text-gray-400 uppercase tracking-wide mb-2">Contact Information</p><p className="text-sm text-gray-600">{tender.contact_info}</p></div>
+          <div className="mt-4">
+            <p className="text-xs text-gray-400 uppercase tracking-wide mb-2">Contact Information</p>
+            <p className="text-sm text-gray-600">{tender.contact_info}</p>
+          </div>
         )}
       </div>
     </div>
@@ -260,17 +236,10 @@ export default function Search() {
   const tog = (list, set, v) => set(list.includes(v) ? list.filter(x => x !== v) : [...list, v])
   const filterCount = selInd.length + selProv.length + selMunis.length + (useMyLoc && userLoc ? 1 : 0)
 
-  // ===========================================================================
-  // SAFE FLY TARGET SETTER — Validates coordinates before setting
-  // ===========================================================================
   const setSafeFlyTarget = (center, zoom, key) => {
-    const safe = safeCenter(center)
-    setFlyTarget({ c: safe, z: zoom, key })
+    setFlyTarget({ c: safeCenter(center), z: zoom, key })
   }
 
-  // ===========================================================================
-  // MAP CENTER — Always returns valid coordinates
-  // ===========================================================================
   const mapCenter = useMemo(() => {
     if (user?.business_lat && user?.business_lng) {
       const c = safeCenter([user.business_lat, user.business_lng])
@@ -295,12 +264,23 @@ export default function Search() {
     else setSafeFlyTarget(SA_CENTER, SA_ZOOM, 'sa' + Date.now())
   }
 
+  // ===========================================================================
+  // FIX: Map data fetch — use FREE /tenders/latest endpoint instead of
+  // /search/tenders which charges credits AND has a hard page_size=500 limit
+  // that was triggering 402s for users with < 500 credits.
+  // ===========================================================================
   const fetchMapData = useCallback(async () => {
     setMapLoading(true)
     try {
-      const res = await searchTenders({ industries: selInd, provinces: selProv, page: 1, page_size: 500 })
+      const res = await getLatest(
+        null,
+        selInd.length ? selInd : undefined,
+        selProv.length ? selProv : undefined,
+      )
+      const tenders = res.data.tenders || []
       const dm = {}
-      for (const t of res.data.results) {
+
+      for (const t of tenders) {
         let placed = false
         for (const [prov, pD] of Object.entries(SA_LOCATIONS)) {
           if (t.province && t.province !== prov) continue
@@ -319,15 +299,21 @@ export default function Search() {
           if (placed) break
         }
         if (!placed && t.province && SA_LOCATIONS[t.province]) {
-          const pD = SA_LOCATIONS[t.province]; const fd = Object.keys(pD.districts)[0]; const dD = pD.districts[fd]
+          const pD = SA_LOCATIONS[t.province]
+          const fd = Object.keys(pD.districts)[0]
+          const dD = pD.districts[fd]
           const k = `${t.province}::${fd}`
           if (!dm[k]) dm[k] = { key: k, province: t.province, district: fd, lat: dD.lat, lng: dD.lng, municipalities: dD.municipalities, tenders: [] }
           dm[k].tenders.push(t)
         }
       }
-      setMapData({ districts: Object.values(dm), total: res.data.total })
-    } catch (e) { console.warn('Map fetch error:', e) }
-    finally { setMapLoading(false) }
+
+      setMapData({ districts: Object.values(dm), total: tenders.length })
+    } catch (e) {
+      console.warn('Map fetch error:', e)
+    } finally {
+      setMapLoading(false)
+    }
   }, [JSON.stringify(selInd), JSON.stringify(selProv)])
 
   useEffect(() => { fetchMapData() }, [fetchMapData])
@@ -386,21 +372,59 @@ export default function Search() {
   const doSearch = async (p = 1, industries = selInd, provinces = selProv, munis = selMunis, kw = keyword) => {
     setLoading(true)
     try {
-      const payload = { industries, provinces, municipalities: munis, keyword: kw || undefined, page: p, page_size: 20 }
-      if (useMyLoc && userLoc) { payload.user_lat = userLoc.lat; payload.user_lng = userLoc.lng; payload.radius_km = radiusKm }
+      const payload = {
+        industries,
+        provinces,
+        municipalities: munis,
+        keyword: kw || undefined,
+        page: p,
+        page_size: 20,
+      }
+
+      // FIX: Only send location params when we actually have valid coordinates.
+      // Previously radius_km=100 was always sent even with null lat/lng,
+      // which caused confusing server-side behaviour and wasted the radius
+      // filter logic on every search.
+      if (useMyLoc && userLoc && isValidCoord(userLoc.lat, userLoc.lng)) {
+        payload.user_lat = userLoc.lat
+        payload.user_lng = userLoc.lng
+        payload.radius_km = radiusKm
+      }
+
       const res = await searchTenders(payload)
-      setResults(res.data.results); setTotal(res.data.total); setCharged(res.data.credits_charged || 0); setPage(p); setSearched(true)
+      setResults(res.data.results)
+      setTotal(res.data.total)
+      setCharged(res.data.credits_charged || 0)
+      setPage(p)
+      setSearched(true)
       await refreshUser()
       saveLastSearch({ industries, provinces, municipalities: munis, keyword: kw })
-      if (res.data.results.length === 0 && (industries.length || provinces.length || munis.length || kw)) toast('No tenders found — try broader filters', { icon: '🔍' })
-      else if (res.data.results.length > 0 && p === 1) { toast.success(`${res.data.total} tenders found`); setMobileTab('results') }
+
+      if (res.data.results.length === 0 && (industries.length || provinces.length || munis.length || kw)) {
+        toast('No tenders found — try broader filters', { icon: '🔍' })
+      } else if (res.data.results.length > 0 && p === 1) {
+        toast.success(`${res.data.total} tenders found`)
+        setMobileTab('results')
+      }
     } catch (err) {
-      if (err.response?.status === 402) toast.error('Not enough credits — please top up')
-      else toast.error(err.response?.data?.detail || 'Search failed')
-    } finally { setLoading(false) }
+      // FIX: Handle 402 with structured error from backend
+      if (err.response?.status === 402) {
+        const detail = err.response?.data?.error
+        const balance = detail?.balance ?? detail?.credit_balance
+        const msg = typeof detail === 'object'
+          ? `Not enough credits (balance: ${balance ?? '?'}). Please top up.`
+          : (err.creditMessage || 'Not enough credits — please top up')
+        toast.error(msg)
+      } else {
+        toast.error(err.response?.data?.detail || err.response?.data?.error || 'Search failed')
+      }
+    } finally {
+      setLoading(false)
+    }
   }
 
   const handleSearch = () => doSearch(1)
+
   const clearFilters = () => {
     setKeyword(''); setSelInd([]); setSelProv([]); setSelMunis([])
     setUseMyLoc(false); setRoutes([])
@@ -427,17 +451,108 @@ export default function Search() {
       <button onClick={() => setShowMap(false)} className="absolute top-3 right-3 z-10 bg-white rounded-full px-3 py-1.5 shadow border border-gray-200 flex items-center gap-1.5 text-xs text-gray-500 hover:text-brand-600"><EyeOff size={11} /> Hide map</button>
       <div className="absolute bottom-8 right-3 z-10 bg-white rounded-xl px-3 py-2 shadow border border-gray-200">
         <p className="text-xs text-gray-400 mb-1.5 font-medium">Tenders</p>
-        {[['#FEE2E2','1–5'],['#FCA5A5','6–20'],['#F87171','21–50'],['#EF4444','51–100'],['#DC2626','100+']].map(([c,l]) => (<div key={l} className="flex items-center gap-1.5 mb-0.5"><div className="w-3 h-3 rounded-full" style={{ background: c }} /><span className="text-xs text-gray-500">{l}</span></div>))}
-        {routes.length > 0 && (<><p className="text-xs text-gray-400 mt-2 mb-1">Routes</p><div className="flex items-center gap-1.5"><div className="w-6 h-0.5 rounded" style={{ background: '#EF4444', opacity: 0.7, borderTop: '2px dashed #EF4444' }} /><span className="text-xs text-gray-500">Driving directions</span></div></>)}
+        {[['#FEE2E2','1–5'],['#FCA5A5','6–20'],['#F87171','21–50'],['#EF4444','51–100'],['#DC2626','100+']].map(([c,l]) => (
+          <div key={l} className="flex items-center gap-1.5 mb-0.5">
+            <div className="w-3 h-3 rounded-full" style={{ background: c }} />
+            <span className="text-xs text-gray-500">{l}</span>
+          </div>
+        ))}
+        {routes.length > 0 && (
+          <>
+            <p className="text-xs text-gray-400 mt-2 mb-1">Routes</p>
+            <div className="flex items-center gap-1.5">
+              <div className="w-6 h-0.5 rounded" style={{ background: '#EF4444', opacity: 0.7, borderTop: '2px dashed #EF4444' }} />
+              <span className="text-xs text-gray-500">Driving directions</span>
+            </div>
+          </>
+        )}
       </div>
       <MapContainer center={mapCenter} zoom={mapZoom} maxBounds={SA_BOUNDS} maxBoundsViscosity={1.0} minZoom={5} maxZoom={14} style={{ height: '100%', width: '100%' }} scrollWheelZoom={scrollWheel}>
         <TileLayer attribution={MAP_ATTRIBUTION} url={MAP_TILE_URL} bounds={SA_BOUNDS} />
         <FlyCtrl target={flyTarget} />
-        {routes.map((route, index) => (<Polyline key={`route-${index}`} positions={route.positions} pathOptions={{ color: route.color, weight: 3, opacity: 0.7, dashArray: '8 8' }}><Popup><p className="text-xs font-semibold">Route to {route.name}</p><p className="text-xs text-gray-500">Driving directions via OSRM</p></Popup></Polyline>))}
-        {user?.business_lat && user?.business_lng && isValidCoord(user.business_lat, user.business_lng) && (<Marker position={[Number(user.business_lat), Number(user.business_lng)]} icon={L.divIcon({ className: '', html: `<div style="width: 18px; height: 18px; background: #1D9E75; border: 3px solid white; border-radius: 50%; box-shadow: 0 0 0 5px rgba(29, 158, 117, 0.3);"></div>`, iconSize: [18, 18], iconAnchor: [9, 9] })}><Popup><strong>{user.business_location || 'Your location'}</strong></Popup></Marker>)}
-        {useMyLoc && userLoc && (<Circle center={[userLoc.lat, userLoc.lng]} radius={radiusKm * 1000} pathOptions={{ color: '#1D9E75', fillColor: '#1D9E75', fillOpacity: .05, weight: 1.5, dashArray: '5 5' }} />)}
-        {visibleDistricts.map(d => { const count = d.tenders.length; const isSel = activePop === d.key; return (<Marker key={d.key} position={[d.lat, d.lng]} icon={makeDistrictIcon(count, isSel)} eventHandlers={{ click: () => setActivePop(d.key) }}><Popup onClose={() => setActivePop(null)} maxWidth={300} minWidth={250}><div><div className="flex items-center justify-between mb-2 pb-2 border-b border-gray-100"><div><p className="text-sm font-semibold text-gray-900">{d.district}</p><p className="text-xs text-gray-400">{d.province}</p></div><span className="px-2 py-0.5 bg-red-50 text-red-700 text-xs font-bold rounded-full border border-red-200">{count} tender{count !== 1 ? 's' : ''}</span></div><div className="space-y-1.5 max-h-52 overflow-y-auto">{d.tenders.slice(0, 5).map((t, i) => (<div key={i} className="flex items-start gap-2 p-2 bg-gray-50 rounded-lg"><div className="flex-1 min-w-0"><p className="text-xs font-medium text-gray-800 line-clamp-2">{t.title}</p><div className="flex items-center gap-1 mt-0.5 flex-wrap">{t.issuing_body && <span className="text-xs text-gray-400 truncate max-w-[120px]">{t.issuing_body}</span>}{t.closing_date && <span className="text-xs text-red-500 flex-shrink-0">· {t.closing_date}</span>}</div></div>{(t.document_url || t.source_url) && (<a href={t.document_url || t.source_url} target="_blank" rel="noopener noreferrer" className="flex-shrink-0 text-red-500 hover:text-red-700" onClick={e => e.stopPropagation()}><ExternalLink size={11} /></a>)}</div>))}</div><button onClick={() => { setSelMunis(d.municipalities.slice(0, 3)); if (!selProv.includes(d.province)) setSelProv(p => [...p, d.province]); doSearch(1, selInd, selProv.includes(d.province) ? selProv : [...selProv, d.province], d.municipalities.slice(0, 3), keyword) }} className="mt-2 w-full py-1.5 text-xs bg-red-500 hover:bg-red-600 text-white rounded-lg font-medium">Search all {count} tenders →</button><p className="text-xs text-gray-400 mt-1.5">{d.municipalities.slice(0, 3).join(' · ')}{d.municipalities.length > 3 ? ` +${d.municipalities.length - 3}` : ''}</p></div></Popup></Marker>) })}
-        {groupedLocations.map((group, index) => { const iconConfig = createGroupedMarkerIcon(group.count, group.type); return (<Marker key={`group-${index}`} position={[group.lat, group.lng]} icon={L.divIcon(iconConfig)}><Popup maxWidth={300} minWidth={250}><div><div className="flex items-center justify-between mb-2 pb-2 border-b border-gray-100"><div><p className="text-sm font-semibold text-gray-900">{group.name}</p><p className="text-xs text-gray-400 capitalize">{group.type}</p></div><span className="px-2 py-0.5 bg-red-50 text-red-700 text-xs font-bold rounded-full border border-red-200">{group.count} tender{group.count !== 1 ? 's' : ''}</span></div><div className="space-y-1.5 max-h-52 overflow-y-auto">{group.tenders.slice(0, 5).map((t, i) => (<div key={i} className="flex items-start gap-2 p-2 bg-gray-50 rounded-lg"><div className="flex-1 min-w-0"><p className="text-xs font-medium text-gray-800 line-clamp-2">{t.title}</p><p className="text-xs text-gray-400 mt-0.5">{t.issuing_body}</p>{t.closing_date && <p className="text-xs text-red-500 mt-0.5">Closes {t.closing_date}</p>}</div></div>))}</div>{group.count > 5 && <p className="text-xs text-gray-400 mt-2 pt-2 border-t border-gray-100">+{group.count - 5} more tender{group.count - 5 !== 1 ? 's' : ''}</p>}</div></Popup></Marker>) })}
+        {routes.map((route, index) => (
+          <Polyline key={`route-${index}`} positions={route.positions} pathOptions={{ color: route.color, weight: 3, opacity: 0.7, dashArray: '8 8' }}>
+            <Popup><p className="text-xs font-semibold">Route to {route.name}</p><p className="text-xs text-gray-500">Driving directions via OSRM</p></Popup>
+          </Polyline>
+        ))}
+        {user?.business_lat && user?.business_lng && isValidCoord(user.business_lat, user.business_lng) && (
+          <Marker position={[Number(user.business_lat), Number(user.business_lng)]} icon={L.divIcon({ className: '', html: `<div style="width:18px;height:18px;background:#1D9E75;border:3px solid white;border-radius:50%;box-shadow:0 0 0 5px rgba(29,158,117,0.3);"></div>`, iconSize: [18,18], iconAnchor: [9,9] })}>
+            <Popup><strong>{user.business_location || 'Your location'}</strong></Popup>
+          </Marker>
+        )}
+        {useMyLoc && userLoc && (
+          <Circle center={[userLoc.lat, userLoc.lng]} radius={radiusKm * 1000} pathOptions={{ color: '#1D9E75', fillColor: '#1D9E75', fillOpacity: .05, weight: 1.5, dashArray: '5 5' }} />
+        )}
+        {visibleDistricts.map(d => {
+          const count = d.tenders.length
+          const isSel = activePop === d.key
+          return (
+            <Marker key={d.key} position={[d.lat, d.lng]} icon={makeDistrictIcon(count, isSel)} eventHandlers={{ click: () => setActivePop(d.key) }}>
+              <Popup onClose={() => setActivePop(null)} maxWidth={300} minWidth={250}>
+                <div>
+                  <div className="flex items-center justify-between mb-2 pb-2 border-b border-gray-100">
+                    <div><p className="text-sm font-semibold text-gray-900">{d.district}</p><p className="text-xs text-gray-400">{d.province}</p></div>
+                    <span className="px-2 py-0.5 bg-red-50 text-red-700 text-xs font-bold rounded-full border border-red-200">{count} tender{count !== 1 ? 's' : ''}</span>
+                  </div>
+                  <div className="space-y-1.5 max-h-52 overflow-y-auto">
+                    {d.tenders.slice(0, 5).map((t, i) => (
+                      <div key={i} className="flex items-start gap-2 p-2 bg-gray-50 rounded-lg">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-medium text-gray-800 line-clamp-2">{t.title}</p>
+                          <div className="flex items-center gap-1 mt-0.5 flex-wrap">
+                            {t.issuing_body && <span className="text-xs text-gray-400 truncate max-w-[120px]">{t.issuing_body}</span>}
+                            {t.closing_date && <span className="text-xs text-red-500 flex-shrink-0">· {t.closing_date}</span>}
+                          </div>
+                        </div>
+                        {(t.document_url || t.source_url) && (
+                          <a href={t.document_url || t.source_url} target="_blank" rel="noopener noreferrer" className="flex-shrink-0 text-red-500 hover:text-red-700" onClick={e => e.stopPropagation()}><ExternalLink size={11} /></a>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  <button
+                    onClick={() => {
+                      setSelMunis(d.municipalities.slice(0, 3))
+                      if (!selProv.includes(d.province)) setSelProv(p => [...p, d.province])
+                      doSearch(1, selInd, selProv.includes(d.province) ? selProv : [...selProv, d.province], d.municipalities.slice(0, 3), keyword)
+                    }}
+                    className="mt-2 w-full py-1.5 text-xs bg-red-500 hover:bg-red-600 text-white rounded-lg font-medium"
+                  >
+                    Search all {count} tenders →
+                  </button>
+                  <p className="text-xs text-gray-400 mt-1.5">{d.municipalities.slice(0, 3).join(' · ')}{d.municipalities.length > 3 ? ` +${d.municipalities.length - 3}` : ''}</p>
+                </div>
+              </Popup>
+            </Marker>
+          )
+        })}
+        {groupedLocations.map((group, index) => {
+          const iconConfig = createGroupedMarkerIcon(group.count, group.type)
+          return (
+            <Marker key={`group-${index}`} position={[group.lat, group.lng]} icon={L.divIcon(iconConfig)}>
+              <Popup maxWidth={300} minWidth={250}>
+                <div>
+                  <div className="flex items-center justify-between mb-2 pb-2 border-b border-gray-100">
+                    <div><p className="text-sm font-semibold text-gray-900">{group.name}</p><p className="text-xs text-gray-400 capitalize">{group.type}</p></div>
+                    <span className="px-2 py-0.5 bg-red-50 text-red-700 text-xs font-bold rounded-full border border-red-200">{group.count} tender{group.count !== 1 ? 's' : ''}</span>
+                  </div>
+                  <div className="space-y-1.5 max-h-52 overflow-y-auto">
+                    {group.tenders.slice(0, 5).map((t, i) => (
+                      <div key={i} className="flex items-start gap-2 p-2 bg-gray-50 rounded-lg">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-medium text-gray-800 line-clamp-2">{t.title}</p>
+                          <p className="text-xs text-gray-400 mt-0.5">{t.issuing_body}</p>
+                          {t.closing_date && <p className="text-xs text-red-500 mt-0.5">Closes {t.closing_date}</p>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  {group.count > 5 && <p className="text-xs text-gray-400 mt-2 pt-2 border-t border-gray-100">+{group.count - 5} more tender{group.count - 5 !== 1 ? 's' : ''}</p>}
+                </div>
+              </Popup>
+            </Marker>
+          )
+        })}
       </MapContainer>
     </div>
   )
@@ -445,13 +560,53 @@ export default function Search() {
   const FiltersPanel = () => (
     <div className="h-full overflow-y-auto bg-white">
       <div className="p-4 space-y-5">
-        <div className="relative"><SearchIcon size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" /><input className="input pl-9 text-sm" placeholder="Keyword..." value={keyword} onChange={e => setKeyword(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSearch()} /></div>
-        <div><p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Industry</p><div className="flex flex-wrap gap-1.5">{INDUSTRIES.map(i => <Chip key={i} label={i} selected={selInd.includes(i)} onClick={() => tog(selInd, setSelInd, i)} />)}</div></div>
-        <div><p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">Province <span className="font-normal text-gray-300 normal-case">(click to zoom map)</span></p><div className="flex flex-wrap gap-1.5">{PROVINCES.map(p => <Chip key={p} label={p} selected={selProv.includes(p)} onClick={() => handleProvToggle(p)} />)}</div></div>
-        {userLoc && (<div><p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Location</p><button onClick={() => { const n = !useMyLoc; setUseMyLoc(n); if (n) setSafeFlyTarget([userLoc.lat, userLoc.lng], 8, 'loc' + Date.now()) }} className={`flex items-center gap-1.5 px-3 py-2 rounded-lg border text-xs w-full ${useMyLoc ? 'bg-brand-50 border-brand-300 text-brand-700' : 'border-gray-200 text-gray-600 hover:border-brand-300'}`}><Navigation size={12} />{useMyLoc ? `✓ ${userLoc.name}` : `Use my business location (${userLoc.name})`}</button>{useMyLoc && (<div className="mt-2 px-1"><div className="flex justify-between text-xs text-gray-500 mb-1"><span>Radius</span><span className="font-semibold text-brand-600">{radiusKm}km</span></div><input type="range" min={25} max={500} step={25} value={radiusKm} onChange={e => setRadiusKm(Number(e.target.value))} className="w-full accent-brand-400" /></div>)}</div>)}
-        <div><button onClick={() => setShowMunis(v => !v)} className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-700 font-medium">{showMunis ? <ChevronUp size={11} /> : <ChevronDown size={11} />} Municipality filter {selMunis.length > 0 && <span className="px-1.5 py-0.5 bg-brand-100 text-brand-700 rounded-full">{selMunis.length}</span>}</button>{showMunis && <div className="mt-2 max-h-36 overflow-y-auto flex flex-wrap gap-1.5">{muniList.slice(0, 60).map(m => <Chip key={m} label={m} small selected={selMunis.includes(m)} onClick={() => tog(selMunis, setSelMunis, m)} />)}</div>}</div>
-        <div className="hidden md:flex items-center justify-between py-2 border-t border-gray-100"><span className="text-xs text-gray-500">Map</span><button onClick={() => setShowMap(v => !v)} className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border ${showMap ? 'bg-brand-50 border-brand-200 text-brand-700' : 'bg-white border-gray-200 text-gray-500'}`}>{showMap ? <><Eye size={11} /> On</> : <><EyeOff size={11} /> Off</>}</button></div>
-        <div className="pb-2 space-y-2"><button onClick={handleSearch} disabled={loading} className="btn-primary w-full py-2.5 text-sm flex items-center justify-center gap-2">{loading ? <><Loader size={14} className="animate-spin" /> Searching...</> : <>Search{filterCount > 0 ? ` (${filterCount} filter${filterCount > 1 ? 's' : ''})` : ''}</>}</button>{filterCount > 0 && <button onClick={clearFilters} className="w-full text-xs text-gray-400 hover:text-gray-600 py-1">Clear all filters</button>}</div>
+        <div className="relative">
+          <SearchIcon size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+          <input className="input pl-9 text-sm" placeholder="Keyword..." value={keyword} onChange={e => setKeyword(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSearch()} />
+        </div>
+        <div>
+          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Industry</p>
+          <div className="flex flex-wrap gap-1.5">{INDUSTRIES.map(i => <Chip key={i} label={i} selected={selInd.includes(i)} onClick={() => tog(selInd, setSelInd, i)} />)}</div>
+        </div>
+        <div>
+          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">Province <span className="font-normal text-gray-300 normal-case">(click to zoom map)</span></p>
+          <div className="flex flex-wrap gap-1.5">{PROVINCES.map(p => <Chip key={p} label={p} selected={selProv.includes(p)} onClick={() => handleProvToggle(p)} />)}</div>
+        </div>
+        {userLoc && (
+          <div>
+            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Location</p>
+            <button
+              onClick={() => { const n = !useMyLoc; setUseMyLoc(n); if (n) setSafeFlyTarget([userLoc.lat, userLoc.lng], 8, 'loc' + Date.now()) }}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg border text-xs w-full ${useMyLoc ? 'bg-brand-50 border-brand-300 text-brand-700' : 'border-gray-200 text-gray-600 hover:border-brand-300'}`}
+            >
+              <Navigation size={12} />{useMyLoc ? `✓ ${userLoc.name}` : `Use my business location (${userLoc.name})`}
+            </button>
+            {useMyLoc && (
+              <div className="mt-2 px-1">
+                <div className="flex justify-between text-xs text-gray-500 mb-1"><span>Radius</span><span className="font-semibold text-brand-600">{radiusKm}km</span></div>
+                <input type="range" min={25} max={500} step={25} value={radiusKm} onChange={e => setRadiusKm(Number(e.target.value))} className="w-full accent-brand-400" />
+              </div>
+            )}
+          </div>
+        )}
+        <div>
+          <button onClick={() => setShowMunis(v => !v)} className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-700 font-medium">
+            {showMunis ? <ChevronUp size={11} /> : <ChevronDown size={11} />} Municipality filter {selMunis.length > 0 && <span className="px-1.5 py-0.5 bg-brand-100 text-brand-700 rounded-full">{selMunis.length}</span>}
+          </button>
+          {showMunis && <div className="mt-2 max-h-36 overflow-y-auto flex flex-wrap gap-1.5">{muniList.slice(0, 60).map(m => <Chip key={m} label={m} small selected={selMunis.includes(m)} onClick={() => tog(selMunis, setSelMunis, m)} />)}</div>}
+        </div>
+        <div className="hidden md:flex items-center justify-between py-2 border-t border-gray-100">
+          <span className="text-xs text-gray-500">Map</span>
+          <button onClick={() => setShowMap(v => !v)} className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border ${showMap ? 'bg-brand-50 border-brand-200 text-brand-700' : 'bg-white border-gray-200 text-gray-500'}`}>
+            {showMap ? <><Eye size={11} /> On</> : <><EyeOff size={11} /> Off</>}
+          </button>
+        </div>
+        <div className="pb-2 space-y-2">
+          <button onClick={handleSearch} disabled={loading} className="btn-primary w-full py-2.5 text-sm flex items-center justify-center gap-2">
+            {loading ? <><Loader size={14} className="animate-spin" /> Searching...</> : <>Search{filterCount > 0 ? ` (${filterCount} filter${filterCount > 1 ? 's' : ''})` : ''}</>}
+          </button>
+          {filterCount > 0 && <button onClick={clearFilters} className="w-full text-xs text-gray-400 hover:text-gray-600 py-1">Clear all filters</button>}
+        </div>
       </div>
     </div>
   )
@@ -459,11 +614,34 @@ export default function Search() {
   const ResultsPanel = () => (
     <div className="h-full overflow-y-auto bg-gray-50">
       <div className="p-4 space-y-3">
-        {searched && !loading && (<div className="flex items-center justify-between"><p className="text-sm font-medium text-gray-700">{total} result{total !== 1 ? 's' : ''}</p>{charged > 0 && <p className="text-xs text-gray-400">{charged} credit{charged !== 1 ? 's' : ''} used</p>}</div>)}
-        {loading && (<div className="flex flex-col items-center justify-center py-24 gap-3"><div className="w-8 h-8 border-2 border-brand-400 border-t-transparent rounded-full animate-spin" /><p className="text-sm text-gray-400">Loading tenders...</p></div>)}
-        {!loading && searched && results.length === 0 && (<div className="flex flex-col items-center justify-center py-20 gap-2 text-center"><p className="text-sm text-gray-500">No tenders found</p><p className="text-xs text-gray-400">Try removing filters or selecting a different province</p></div>)}
-        {!loading && results.map(t => (<TenderCard key={t.id} tender={t} showBadgeColor onView={(tender) => setSelectedTender(tender)} />))}
-        {total > 20 && !loading && (<div className="flex items-center justify-center gap-3 pt-2 pb-4"><button onClick={() => doSearch(page - 1)} disabled={page === 1} className="btn-secondary text-xs py-1.5 px-3">← Prev</button><span className="text-xs text-gray-500">Page {page} of {Math.ceil(total / 20)}</span><button onClick={() => doSearch(page + 1)} disabled={page >= Math.ceil(total / 20)} className="btn-secondary text-xs py-1.5 px-3">Next →</button></div>)}
+        {searched && !loading && (
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-medium text-gray-700">{total} result{total !== 1 ? 's' : ''}</p>
+            {charged > 0 && <p className="text-xs text-gray-400">{charged} credit{charged !== 1 ? 's' : ''} used</p>}
+          </div>
+        )}
+        {loading && (
+          <div className="flex flex-col items-center justify-center py-24 gap-3">
+            <div className="w-8 h-8 border-2 border-brand-400 border-t-transparent rounded-full animate-spin" />
+            <p className="text-sm text-gray-400">Loading tenders...</p>
+          </div>
+        )}
+        {!loading && searched && results.length === 0 && (
+          <div className="flex flex-col items-center justify-center py-20 gap-2 text-center">
+            <p className="text-sm text-gray-500">No tenders found</p>
+            <p className="text-xs text-gray-400">Try removing filters or selecting a different province</p>
+          </div>
+        )}
+        {!loading && results.map(t => (
+          <TenderCard key={t.id} tender={t} showBadgeColor onView={(tender) => setSelectedTender(tender)} />
+        ))}
+        {total > 20 && !loading && (
+          <div className="flex items-center justify-center gap-3 pt-2 pb-4">
+            <button onClick={() => doSearch(page - 1)} disabled={page === 1} className="btn-secondary text-xs py-1.5 px-3">← Prev</button>
+            <span className="text-xs text-gray-500">Page {page} of {Math.ceil(total / 20)}</span>
+            <button onClick={() => doSearch(page + 1)} disabled={page >= Math.ceil(total / 20)} className="btn-secondary text-xs py-1.5 px-3">Next →</button>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -471,26 +649,39 @@ export default function Search() {
   return (
     <div className="flex flex-col overflow-hidden" style={{ height: 'calc(100vh - 0px)' }}>
       <div className="flex-shrink-0 bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between gap-3">
-        <div className="min-w-0"><h1 className="text-base font-semibold text-gray-900">Search tenders</h1>{searched && <p className="text-xs text-gray-400">{total} results{charged > 0 ? ` · ${charged} credit${charged !== 1 ? 's' : ''} used` : ''}</p>}</div>
+        <div className="min-w-0">
+          <h1 className="text-base font-semibold text-gray-900">Search tenders</h1>
+          {searched && <p className="text-xs text-gray-400">{total} results{charged > 0 ? ` · ${charged} credit${charged !== 1 ? 's' : ''} used` : ''}</p>}
+        </div>
         <div className="flex items-center gap-2 flex-shrink-0">
-          <button onClick={() => setShowMap(v => !v)} className={`hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs ${showMap ? 'bg-brand-50 border-brand-200 text-brand-700' : 'bg-white border-gray-200 text-gray-500'}`}>{showMap ? <><Eye size={12} /> Map on</> : <><EyeOff size={12} /> Map off</>}</button>
-          <button onClick={() => setShowFilters(v => !v)} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs ${showFilters ? 'bg-brand-50 border-brand-200 text-brand-700' : 'bg-white border-gray-200 text-gray-600'}`}><Filter size={12} /> Filters {filterCount > 0 && <span className="bg-brand-400 text-white rounded-full px-1.5 py-0.5 text-xs">{filterCount}</span>}</button>
+          <button onClick={() => setShowMap(v => !v)} className={`hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs ${showMap ? 'bg-brand-50 border-brand-200 text-brand-700' : 'bg-white border-gray-200 text-gray-500'}`}>
+            {showMap ? <><Eye size={12} /> Map on</> : <><EyeOff size={12} /> Map off</>}
+          </button>
+          <button onClick={() => setShowFilters(v => !v)} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs ${showFilters ? 'bg-brand-50 border-brand-200 text-brand-700' : 'bg-white border-gray-200 text-gray-600'}`}>
+            <Filter size={12} /> Filters {filterCount > 0 && <span className="bg-brand-400 text-white rounded-full px-1.5 py-0.5 text-xs">{filterCount}</span>}
+          </button>
         </div>
       </div>
 
+      {/* Desktop layout */}
       <div className="hidden md:flex flex-1 overflow-hidden">
         {showFilters && <div className="w-72 flex-shrink-0 border-r border-gray-200 overflow-hidden"><FiltersPanel /></div>}
         <div className="flex-1 flex overflow-hidden">
-          <div className={`flex flex-col overflow-hidden border-r border-gray-200 ${showMap ? 'w-[380px] flex-shrink-0' : 'flex-1'}`}><div className="flex-1 overflow-y-auto"><ResultsPanel /></div></div>
+          <div className={`flex flex-col overflow-hidden border-r border-gray-200 ${showMap ? 'w-[380px] flex-shrink-0' : 'flex-1'}`}>
+            <div className="flex-1 overflow-y-auto"><ResultsPanel /></div>
+          </div>
           {showMap && !selectedTender && <div className="flex-1 relative overflow-hidden"><TheMap scrollWheel /></div>}
           {selectedTender && <div className="flex-1 relative overflow-hidden"><TenderDetailView tender={selectedTender} onClose={() => setSelectedTender(null)} /></div>}
         </div>
       </div>
 
+      {/* Mobile layout */}
       <div className="md:hidden flex-1 flex flex-col overflow-hidden">
         <div className="flex-shrink-0 flex border-b border-gray-200 bg-white">
           {[{ id: 'filters', label: 'Filters', badge: filterCount }, { id: 'results', label: total > 0 ? `Results (${total})` : 'Results' }, { id: 'map', label: 'Map' }].map(tab => (
-            <button key={tab.id} onClick={() => setMobileTab(tab.id)} className={`flex-1 flex items-center justify-center gap-1 py-3 text-xs font-medium border-b-2 ${mobileTab === tab.id ? 'border-brand-400 text-brand-600' : 'border-transparent text-gray-500'}`}>{tab.label}{tab.badge > 0 && <span className="bg-brand-400 text-white rounded-full px-1.5 py-0.5 text-xs">{tab.badge}</span>}</button>
+            <button key={tab.id} onClick={() => setMobileTab(tab.id)} className={`flex-1 flex items-center justify-center gap-1 py-3 text-xs font-medium border-b-2 ${mobileTab === tab.id ? 'border-brand-400 text-brand-600' : 'border-transparent text-gray-500'}`}>
+              {tab.label}{tab.badge > 0 && <span className="bg-brand-400 text-white rounded-full px-1.5 py-0.5 text-xs">{tab.badge}</span>}
+            </button>
           ))}
         </div>
         <div className="flex-1 overflow-hidden">
