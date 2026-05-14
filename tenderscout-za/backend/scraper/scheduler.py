@@ -111,9 +111,9 @@ def start_scheduler(use_cron: bool = False) -> AsyncIOScheduler:
         minute = int(os.getenv("SCRAPE_CRON_MINUTE", "0"))
         
         scheduler.add_job(
-            _scraper_job_wrapper,
-            trigger=CronTrigger(hour=hour, minute=minute),
-            id="scrape_all_sites",
+    _scraper_job_wrapper,
+    trigger=CronTrigger(hour="6,18", minute="0"),
+    id="scrape_twice_daily",
             name="Scrape all tender sites (daily)",
             replace_existing=True,
             max_instances=1,  # Prevent overlapping runs
