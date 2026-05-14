@@ -1,6 +1,23 @@
-from pydantic import BaseModel, EmailStr, ConfigDict
-from typing import Optional, List
+from __future__ import annotations
+
+from decimal import Decimal
+from pydantic import BaseModel, EmailStr, ConfigDict, field_validator, model_validator
+from typing import Optional, List, Literal
 from datetime import datetime
+
+
+# =============================================================================
+# SHARED CONFIG
+# =============================================================================
+# All ORM-backed schemas inherit this so we don't repeat model_config everywhere.
+# json_encoders ensures Decimal values serialise to float in JSON responses
+# instead of throwing a TypeError.
+
+class _OrmBase(BaseModel):
+    model_config = ConfigDict(
+        from_attributes=True,
+        json_encoders={Decimal: float},
+    )
 
 
 # =============================================================================
@@ -13,109 +30,179 @@ class Token(BaseModel):
 
 
 class UserRegister(BaseModel):
-    email: EmailStr
-    full_name: str
-    password: str
-    # NEW FIELDS
-    province: Optional[str] = None
-    town: Optional[str] = None
-    business_location: Optional[str] = None
-    business_lat: Optional[float] = None
-    business_lng: Optional[float] = None
+    email:             EmailStr
+    full_name:         str
+    password:          str
+    province:          Optional[str]   = None
+    town:              Optional[str]   = None
+    business_location: Optional[str]   = None
+    business_lat:      Optional[float] = None
+    business_lng:      Optional[float] = None
+
+    @field_validator("password")
+    @classmethod
+    def password_strength(cls, v: str) -> str:
+        if len(v) < 8:
+            raise ValueError("Password must be at least 8 characters")
+        return v
+
+    @field_validator("full_name")
+    @classmethod
+    def name_not_empty(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("Full name cannot be blank")
+        return v
+
+    @field_validator("business_lat")
+    @classmethod
+    def validate_lat(cls, v: Optional[float]) -> Optional[float]:
+        if v is not None and not (-90 <= v <= 90):
+            raise ValueError("Latitude must be between -90 and 90")
+        return v
+
+    @field_validator("business_lng")
+    @classmethod
+    def validate_lng(cls, v: Optional[float]) -> Optional[float]:
+        if v is not None and not (-180 <= v <= 180):
+            raise ValueError("Longitude must be between -180 and 180")
+        return v
 
 
 class UserLogin(BaseModel):
-    email: EmailStr
+    email:    EmailStr
     password: str
 
 
-class UserOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-    id: int
-    email: str
-    full_name: str
-    credit_balance: float
-    industry_preferences: List[str] = []
-    province_preferences: List[str] = []
-    town_preferences: List[str] = []
-    municipality_preferences: List[str] = []
-    business_location: Optional[str] = None
-    business_lat: Optional[float] = None
-    business_lng: Optional[float] = None
-    search_radius_km: Optional[int] = 100
-    created_at: datetime
+class UserOut(_OrmBase):
+    id:                      int
+    email:                   str
+    full_name:               str
+    credit_balance:          float           # serialised from Decimal via json_encoders
+    industry_preferences:    List[str] = []
+    province_preferences:    List[str] = []
+    town_preferences:        List[str] = []
+    municipality_preferences:List[str] = []
+    business_location:       Optional[str]   = None
+    business_lat:            Optional[float] = None
+    business_lng:            Optional[float] = None
+    search_radius_km:        int             = 100
+    created_at:              datetime
 
-
-class UserPreferences(BaseModel):
-    industry_preferences: List[str] = []
-    province_preferences: List[str] = []
-    town_preferences: List[str] = []
-    municipality_preferences: List[str] = []
-    business_location: Optional[str] = None
-    business_lat: Optional[float] = None
-    business_lng: Optional[float] = None
-    search_radius_km: Optional[int] = 100
+    # FIX: JSON columns in the model can be None when the user was created
+    # before preferences were set. Coerce None → [] so the frontend never
+    # receives null for list fields.
+    @model_validator(mode="after")
+    def coerce_list_fields(self) -> "UserOut":
+        for field in ("industry_preferences", "province_preferences",
+                      "town_preferences", "municipality_preferences"):
+            if getattr(self, field) is None:
+                setattr(self, field, [])
+        return self
 
 
 # =============================================================================
-# CREDIT/PAYMENT SCHEMAS
+# USER PREFERENCES
+# =============================================================================
+# FIX: Previously defined but unused — user.py accepted a raw dict.
+# Now used as the actual request body schema for PUT /user/preferences,
+# providing validation instead of silently accepting arbitrary keys.
+
+class UserPreferences(BaseModel):
+    industry_preferences:     Optional[List[str]]  = None
+    province_preferences:     Optional[List[str]]  = None
+    town_preferences:         Optional[List[str]]  = None
+    municipality_preferences: Optional[List[str]]  = None
+    business_location:        Optional[str]         = None
+    business_lat:             Optional[float]       = None
+    business_lng:             Optional[float]       = None
+    search_radius_km:         Optional[int]         = None
+
+    @field_validator("business_lat")
+    @classmethod
+    def validate_lat(cls, v: Optional[float]) -> Optional[float]:
+        if v is not None and not (-90 <= v <= 90):
+            raise ValueError("Latitude must be between -90 and 90")
+        return v
+
+    @field_validator("business_lng")
+    @classmethod
+    def validate_lng(cls, v: Optional[float]) -> Optional[float]:
+        if v is not None and not (-180 <= v <= 180):
+            raise ValueError("Longitude must be between -180 and 180")
+        return v
+
+    @field_validator("search_radius_km")
+    @classmethod
+    def validate_radius(cls, v: Optional[int]) -> Optional[int]:
+        if v is not None and not (1 <= v <= 1000):
+            raise ValueError("search_radius_km must be between 1 and 1000")
+        return v
+
+
+# =============================================================================
+# CREDIT / PAYMENT SCHEMAS
 # =============================================================================
 
 class CreditBalance(BaseModel):
-    balance: float
+    balance:    float
     rand_value: float
 
 
+# FIX: validate package at schema level — previously any string was accepted
+# and the backend threw a raw 400 with no helpful message.
 class TopUpRequest(BaseModel):
-    package: str
+    package: Literal["100", "250", "500"]
 
 
 class TopUpResponse(BaseModel):
-    success: bool
+    success:       bool
     credits_added: float
-    new_balance: float
-    message: str
+    new_balance:   float
+    message:       str
 
 
 # =============================================================================
 # TENDER SCHEMAS
 # =============================================================================
 
-class TenderOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-    id: int
-    title: str
-    description: Optional[str] = None
-    issuing_body: Optional[str] = None
-    province: Optional[str] = None
-    municipality: Optional[str] = None
-    town: Optional[str] = None
-    industry_category: Optional[str] = None
-    closing_date: Optional[str] = None
-    posted_date: Optional[str] = None
-    source_url: str
-    source_site: Optional[str] = None
-    reference_number: Optional[str] = None
-    contact_info: Optional[str] = None
-    document_url: Optional[str] = None
-    is_active: Optional[bool] = True
-    scraped_at: Optional[datetime] = None
+class TenderOut(_OrmBase):
+    id:                int
+    title:             str
+    description:       Optional[str]      = None
+    issuing_body:      Optional[str]      = None
+    province:          Optional[str]      = None
+    municipality:      Optional[str]      = None
+    town:              Optional[str]      = None
+    industry_category: Optional[str]      = None
+    closing_date:      Optional[str]      = None
+    posted_date:       Optional[str]      = None
+    source_url:        str
+    source_site:       Optional[str]      = None
+    reference_number:  Optional[str]      = None
+    contact_info:      Optional[str]      = None
+    document_url:      Optional[str]      = None
+    is_active:         bool               = True
+    scraped_at:        Optional[datetime] = None
+    # FIX: expose lat/lng so the frontend map can use real coordinates
+    lat:               Optional[float]    = None
+    lng:               Optional[float]    = None
 
 
 class TenderLatestResponse(BaseModel):
     new_count: int
-    tenders: List[TenderOut]
+    tenders:   List[TenderOut]
 
 
 class TenderStatsResponse(BaseModel):
-    """Statistics about tenders in the database."""
-    total_tenders: int
-    active_tenders: int
+    """Statistics about tenders in the database. (endpoint not yet implemented)"""
+    total_tenders:   int
+    active_tenders:  int
     expired_tenders: int
-    by_province: dict
-    by_industry: dict
+    by_province:     dict
+    by_industry:     dict
     by_municipality: dict
-    last_updated: Optional[datetime] = None
+    last_updated:    Optional[datetime] = None
 
 
 # =============================================================================
@@ -130,9 +217,49 @@ class SearchRequest(BaseModel):
     keyword:        Optional[str]   = None
     user_lat:       Optional[float] = None
     user_lng:       Optional[float] = None
-    radius_km:      Optional[float] = 100
+    # FIX: default None instead of 100 — sending radius_km=100 with no
+    # lat/lng caused confusing server-side behaviour on every search.
+    # Radius is only meaningful when coordinates are also provided.
+    radius_km:      Optional[float] = None
     page:           int             = 1
     page_size:      int             = 20
+
+    @field_validator("page")
+    @classmethod
+    def page_positive(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("page must be >= 1")
+        return v
+
+    @field_validator("page_size")
+    @classmethod
+    def page_size_range(cls, v: int) -> int:
+        if not (1 <= v <= 100):
+            raise ValueError("page_size must be between 1 and 100")
+        return v
+
+    @field_validator("keyword")
+    @classmethod
+    def keyword_strip(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            v = v.strip()
+            return v if v else None
+        return None
+
+    @field_validator("radius_km")
+    @classmethod
+    def radius_positive(cls, v: Optional[float]) -> Optional[float]:
+        if v is not None and v <= 0:
+            raise ValueError("radius_km must be positive")
+        return v
+
+    @model_validator(mode="after")
+    def radius_requires_coords(self) -> "SearchRequest":
+        """Radius without coordinates is meaningless — clear it silently."""
+        if self.radius_km is not None:
+            if self.user_lat is None or self.user_lng is None:
+                self.radius_km = None
+        return self
 
 
 class SearchResponse(BaseModel):
@@ -147,151 +274,135 @@ class SearchResponse(BaseModel):
 # TRANSACTION SCHEMAS
 # =============================================================================
 
-class TransactionOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-    id: int
-    amount: float
+class TransactionOut(_OrmBase):
+    id:               int
+    amount:           float
     transaction_type: str
-    description: Optional[str] = None
-    created_at: datetime
+    description:      Optional[str] = None
+    created_at:       datetime
 
 
 # =============================================================================
 # SCRAPER STATUS SCHEMAS
 # =============================================================================
 
-class ScraperStatusOut(BaseModel):
-    """Status of a single scraper source."""
-    model_config = ConfigDict(from_attributes=True)
-    id: int
-    site_name: str
-    last_scraped_at: Optional[datetime] = None
-    last_result_count: int = 0
-    last_error: Optional[str] = None
-    is_healthy: bool = True
+class ScraperStatusOut(_OrmBase):
+    id:                int
+    site_name:         str
+    last_scraped_at:   Optional[datetime] = None
+    last_result_count: int                = 0
+    last_error:        Optional[str]      = None
+    is_healthy:        bool               = True
 
 
 class ScraperStatusSummary(BaseModel):
-    """Summary of all scraper sources."""
-    total_sources: int
-    healthy_sources: int
+    total_sources:     int
+    healthy_sources:   int
     unhealthy_sources: int
-    sources: List[ScraperStatusOut]
-    last_full_run: Optional[datetime] = None
+    sources:           List[ScraperStatusOut]
+    last_full_run:     Optional[datetime] = None
 
 
 class ScraperRunResponse(BaseModel):
-    """Response after running the scraper pipeline."""
-    success: bool
-    new_tenders: int
+    success:       bool
+    new_tenders:   int
     total_scraped: int
-    sources_run: int
-    errors: List[str] = []
-    run_at: datetime
+    sources_run:   int
+    errors:        List[str] = []
+    run_at:        datetime
 
 
 # =============================================================================
-# CRAWLER SCHEMAS (NEW)
+# CRAWLER SCHEMAS
 # =============================================================================
 
-class CrawlResultOut(BaseModel):
-    """Discovered URL from the BFS crawler."""
-    model_config = ConfigDict(from_attributes=True)
-    id: int
-    site_name: str
-    seed_url: str
+class CrawlResultOut(_OrmBase):
+    id:             int
+    site_name:      str
+    seed_url:       str
     discovered_url: str
-    final_url: Optional[str] = None
-    depth: int
-    status_code: int
-    is_active: bool
-    discovered_at: datetime
-    last_seen_at: Optional[datetime] = None
-    scraped_at: Optional[datetime] = None
-    scrape_success: bool = False
-    scrape_error: Optional[str] = None
-    tenders_found: int = 0
+    final_url:      Optional[str]      = None
+    depth:          int
+    status_code:    int
+    is_active:      bool
+    discovered_at:  datetime
+    last_seen_at:   Optional[datetime] = None
+    scraped_at:     Optional[datetime] = None
+    scrape_success: bool               = False
+    scrape_error:   Optional[str]      = None
+    tenders_found:  int                = 0
 
 
 class CrawlStatsResponse(BaseModel):
-    """Statistics about crawled URLs."""
-    total_urls: int
-    active_urls: int
-    pending_scrape: int  # URLs discovered but not yet scraped
-    scraped_urls: int
+    total_urls:     int
+    active_urls:    int
+    pending_scrape: int
+    scraped_urls:   int
     failed_scrapes: int
-    by_site: dict  # site_name -> count
+    by_site:        dict
 
 
 class PendingCrawlUrlsResponse(BaseModel):
-    """List of URLs that need to be scraped."""
     total: int
-    urls: List[CrawlResultOut]
+    urls:  List[CrawlResultOut]
 
 
 # =============================================================================
-# DASHBOARD/ADMIN SCHEMAS
+# DASHBOARD / ADMIN SCHEMAS  (endpoints not yet implemented)
 # =============================================================================
 
 class DashboardStatsResponse(BaseModel):
-    """Overall platform statistics for admin dashboard."""
-    total_users: int
-    active_users: int
-    total_tenders: int
+    total_users:    int
+    active_users:   int
+    total_tenders:  int
     active_tenders: int
     total_searches: int
-    total_revenue: float
+    total_revenue:  float
     scraper_health: ScraperStatusSummary
-    crawler_stats: CrawlStatsResponse
+    crawler_stats:  CrawlStatsResponse
     recent_tenders: List[TenderOut]
-    recent_searches: List[dict]  # Simplified search log entries
+    recent_searches:List[dict]
 
 
 class HealthCheckResponse(BaseModel):
-    """System health check response."""
-    status: str  # "healthy", "degraded", "unhealthy"
-    database: bool
-    scrapers: ScraperStatusSummary
-    crawlers: CrawlStatsResponse
+    status:    str   # "healthy" | "degraded" | "unhealthy"
+    database:  bool
+    scrapers:  ScraperStatusSummary
+    crawlers:  CrawlStatsResponse
     timestamp: datetime
 
 
 # =============================================================================
-# MUNICIPALITY/PROVINCE REFERENCE SCHEMAS
+# REFERENCE DATA SCHEMAS  (endpoints not yet implemented)
 # =============================================================================
 
 class ProvinceOut(BaseModel):
-    """Province reference data."""
-    name: str
+    name:               str
     municipality_count: int
-    tender_count: int
+    tender_count:       int
 
 
 class MunicipalityOut(BaseModel):
-    """Municipality reference data."""
-    name: str
-    province: str
+    name:         str
+    province:     str
     tender_count: int
 
 
 class TownOut(BaseModel):
-    """Town reference data."""
-    name: str
+    name:         str
     municipality: str
-    province: str
+    province:     str
     tender_count: int
 
 
 class IndustryOut(BaseModel):
-    """Industry category reference data."""
-    name: str
+    name:         str
     tender_count: int
 
 
 class ReferenceDataResponse(BaseModel):
-    """All reference data for frontend filters."""
-    provinces: List[ProvinceOut]
-    municipalities: List[MunicipalityOut]
-    towns: List[TownOut]
-    industries: List[IndustryOut]
-    last_updated: datetime
+    provinces:     List[ProvinceOut]
+    municipalities:List[MunicipalityOut]
+    towns:         List[TownOut]
+    industries:    List[IndustryOut]
+    last_updated:  datetime
