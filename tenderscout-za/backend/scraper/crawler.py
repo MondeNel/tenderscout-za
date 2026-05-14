@@ -30,7 +30,10 @@ from urllib.parse import urljoin, urlparse
 from urllib.robotparser import RobotFileParser
 from bs4 import BeautifulSoup
 from typing import List, Dict, Set, Optional, Tuple
-from datetime import datetime
+
+from datetime import datetime, timezone
+from loguru import logger
+
 
 logger = logging.getLogger(__name__)
 
@@ -41,15 +44,26 @@ logger = logging.getLogger(__name__)
 # A URL or its anchor text must contain at least one of these to be queued.
 # =============================================================================
 
+# Expanded to include SCM, Bulletin, and common SA municipal variants
 TENDER_KEYWORDS = [
+    # Core English Keywords
     "tender", "bid", "rfq", "rfp", "quotation", "procurement",
     "supply", "contract", "bids", "tenders", "sourcing", "award",
+    "scm", "bulletin", "advertised", "advert", "proposal",
+    
+    # Common SA Municipal Terminology
+    "supply-chain", "request-for-quotation", "current-tenders", 
+    "formal-quotation", "bidding-document", "tender-bulletin",
+    
+    # Regional/Afrikaans variants (Found in NC/WC/NW provinces)
+    "navraag", "tendernommer", "kwotasie"
 ]
 
-# Strong anchor keywords — if anchor text contains these, follow even if URL doesn't
+# Strong anchor keywords — prioritize these for link clicking/following
 STRONG_ANCHOR_KEYWORDS = [
     "tender", "bid", "rfq", "rfp", "quotation", "procurement",
-    "sourcing", "bids", "tenders",
+    "sourcing", "bids", "tenders", "scm", "advertised", 
+    "bulletin", "supply chain"
 ]
 
 # Configuration Constants
