@@ -406,3 +406,16 @@ class ReferenceDataResponse(BaseModel):
     towns:         List[TownOut]
     industries:    List[IndustryOut]
     last_updated:  datetime
+
+
+# =============================================================================
+# SEARCH HISTORY SCHEMA
+# =============================================================================
+
+class SearchHistoryOut(_OrmBase):
+    """Single search log entry returned by GET /search/history."""
+    id:              int
+    query_params:    dict              = {}
+    result_count:    int               = 0
+    credits_charged: float
+    searched_at:     datetime
