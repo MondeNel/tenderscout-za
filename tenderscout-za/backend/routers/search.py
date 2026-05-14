@@ -1,20 +1,45 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+"""
+File: routers/search.py
+Purpose: Tender search with filtering, pagination, radius search, and credit charging
+"""
+
+from decimal import Decimal
+from fastapi import APIRouter, Depends, HTTPException, Request, Query, status
 from sqlalchemy.orm import Session
-from sqlalchemy import or_, desc
+from sqlalchemy import or_, desc, and_
 from database import get_db
 import auth_utils
 import models, schemas
 import math
+import logging
 import os
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/search", tags=["Search"])
-CREDITS_PER_RESULT = float(os.getenv("CREDITS_PER_RESULT", 1))
 
-# ---------------------------------------------------------------------------
-# Industry alias map
-# ---------------------------------------------------------------------------
-_INDUSTRY_ALIASES: dict = {
-    # Old → new
+# =============================================================================
+# CONFIGURATION
+# =============================================================================
+
+try:
+    CREDITS_PER_RESULT = Decimal(os.getenv("CREDITS_PER_RESULT", "1"))
+except Exception:
+    logger.warning("[SEARCH] Invalid CREDITS_PER_RESULT in env — defaulting to 1")
+    CREDITS_PER_RESULT = Decimal("1")
+
+# Bounding box padding in degrees added around the user's radius for the
+# DB pre-filter before the in-memory haversine pass.
+# 1 degree latitude ≈ 111km, so padding of 1.0 is conservative and safe.
+_BBOX_PADDING_DEG = 1.0
+
+
+# =============================================================================
+# INDUSTRY ALIAS MAP
+# =============================================================================
+# Frontend may send old category names — map them transparently to current names.
+
+_INDUSTRY_ALIASES: dict[str, list[str]] = {
+    # Legacy → current
     "Security Services":     ["Security, Access, Alarms & Fire"],
     "Construction":          ["Civil", "Building & Trades"],
     "Waste Management":      ["Waste Management"],
@@ -29,7 +54,7 @@ _INDUSTRY_ALIASES: dict = {
     "Transport & Logistics": ["Transport & Logistics"],
     "Healthcare":            ["Medical & Healthcare"],
     "Landscaping":           ["Cleaning & Facility Management"],
-    # New → self (pass through)
+    # Current → self (pass-through so new names always resolve correctly)
     "Security, Access, Alarms & Fire":   ["Security, Access, Alarms & Fire"],
     "Civil":                             ["Civil"],
     "Building & Trades":                 ["Building & Trades"],
@@ -37,7 +62,6 @@ _INDUSTRY_ALIASES: dict = {
     "Plumbing & Water":                  ["Plumbing & Water"],
     "IT & Telecoms":                     ["IT & Telecoms"],
     "Cleaning & Facility Management":    ["Cleaning & Facility Management"],
-    "Waste Management":                  ["Waste Management"],
     "Mechanical, Plant & Equipment":     ["Mechanical, Plant & Equipment"],
     "Transport & Logistics":             ["Transport & Logistics"],
     "Materials, Supply & Services":      ["Materials, Supply & Services"],
@@ -51,18 +75,20 @@ _INDUSTRY_ALIASES: dict = {
 }
 
 
-def _resolve_industries(requested: list) -> list:
-    resolved = set()
+def _resolve_industries(requested: list[str]) -> list[str]:
+    resolved: set[str] = set()
     for name in requested:
         aliases = _INDUSTRY_ALIASES.get(name)
-        if aliases:
-            resolved.update(aliases)
-        else:
-            resolved.add(name)
+        resolved.update(aliases if aliases else [name])
     return list(resolved)
 
 
-def _haversine_km(lat1, lng1, lat2, lng2) -> float:
+# =============================================================================
+# HAVERSINE DISTANCE
+# =============================================================================
+
+def _haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    """Return great-circle distance in km between two lat/lng points."""
     R = 6371.0
     d_lat = math.radians(lat2 - lat1)
     d_lng = math.radians(lng2 - lng1)
@@ -72,30 +98,56 @@ def _haversine_km(lat1, lng1, lat2, lng2) -> float:
     return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
+def _bbox_filter(query, lat: float, lng: float, radius_km: float):
+    """
+    Pre-filter tenders to a bounding box before the in-memory haversine pass.
+
+    FIX: Previously query.all() loaded the entire table into memory for radius
+    searches. A bounding box cuts the candidate set to roughly (radius × 2)²
+    area, which is orders of magnitude smaller on a national dataset.
+
+    1 degree latitude  ≈ 111 km
+    1 degree longitude ≈ 111 km × cos(lat) — conservative to use 111 km flat
+    """
+    pad = (radius_km / 111.0) + _BBOX_PADDING_DEG
+    return query.filter(
+        and_(
+            models.Tender.lat.isnot(None),
+            models.Tender.lng.isnot(None),
+            models.Tender.lat.between(lat - pad, lat + pad),
+            models.Tender.lng.between(lng - pad, lng + pad),
+        )
+    )
+
+
+# =============================================================================
+# SEARCH ENDPOINT
+# =============================================================================
+
 @router.post("/tenders", response_model=schemas.SearchResponse)
 def search_tenders(
-    request: schemas.SearchRequest,
+    http_request: Request,                              # FastAPI Request object
+    search: schemas.SearchRequest,                      # renamed from 'request' to avoid collision
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(auth_utils.get_current_user)
+    current_user: models.User = Depends(auth_utils.get_current_user),
 ):
+    """
+    Search tenders with filtering, optional radius search, pagination,
+    and per-result credit charging.
+    """
     # -------------------------------------------------------------------------
-    # FIX: Credit check — use actual balance vs minimum viable amount (1 credit)
+    # Credit check — require at least 1 credit to attempt any search
     # -------------------------------------------------------------------------
-    # Old bug: checked page_size * rate upfront (e.g. 20 credits for page_size=20)
-    # even when the query might return 0–3 results. A user with 5 credits and
-    # page_size=20 would always get a 402 even though they can afford the results.
-    #
-    # New behaviour: require at least 1 credit to attempt the search.
-    # Actual charge happens after results are fetched, based on real result count.
-    if current_user.credit_balance < CREDITS_PER_RESULT:
+    balance = Decimal(str(current_user.credit_balance))
+    if balance < CREDITS_PER_RESULT:
         raise HTTPException(
-            status_code=402,
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
             detail={
-                "message": "Insufficient credits. Please top up to continue searching.",
-                "balance": current_user.credit_balance,
-                "required": CREDITS_PER_RESULT,
+                "message":   "Insufficient credits. Please top up to continue searching.",
+                "balance":   float(balance),
+                "required":  float(CREDITS_PER_RESULT),
                 "topup_url": "/credits/topup",
-            }
+            },
         )
 
     # -------------------------------------------------------------------------
@@ -105,30 +157,33 @@ def search_tenders(
 
     # -------------------------------------------------------------------------
     # Filters
+    # NOTE: ilike with % wildcards bypasses indexes — acceptable at current scale.
+    # When the tender count exceeds ~100k, replace with PostgreSQL full-text search
+    # (tsvector/tsquery) or a dedicated search engine like Meilisearch.
     # -------------------------------------------------------------------------
-    if request.industries:
-        resolved = _resolve_industries(request.industries)
+    if search.industries:
+        resolved = _resolve_industries(search.industries)
         query = query.filter(
             or_(*[models.Tender.industry_category.ilike(f"%{i}%") for i in resolved])
         )
 
-    if request.provinces:
+    if search.provinces:
         query = query.filter(
-            or_(*[models.Tender.province.ilike(f"%{p}%") for p in request.provinces])
+            or_(*[models.Tender.province.ilike(f"%{p}%") for p in search.provinces])
         )
 
-    if request.municipalities:
+    if search.municipalities:
         query = query.filter(
-            or_(*[models.Tender.municipality.ilike(f"%{m}%") for m in request.municipalities])
+            or_(*[models.Tender.municipality.ilike(f"%{m}%") for m in search.municipalities])
         )
 
-    if request.towns:
+    if search.towns:
         query = query.filter(
-            or_(*[models.Tender.town.ilike(f"%{t}%") for t in request.towns])
+            or_(*[models.Tender.town.ilike(f"%{t}%") for t in search.towns])
         )
 
-    if request.keyword:
-        kw = f"%{request.keyword}%"
+    if search.keyword:
+        kw = f"%{search.keyword}%"
         query = query.filter(or_(
             models.Tender.title.ilike(kw),
             models.Tender.description.ilike(kw),
@@ -136,51 +191,61 @@ def search_tenders(
         ))
 
     # -------------------------------------------------------------------------
-    # Radius filter (in-memory haversine) vs standard DB pagination
+    # Radius search vs standard pagination
     # -------------------------------------------------------------------------
     use_radius = (
-        request.user_lat is not None
-        and request.user_lng is not None
-        and request.radius_km is not None
-        and request.radius_km > 0
+        search.user_lat is not None
+        and search.user_lng is not None
+        and search.radius_km is not None
+        and search.radius_km > 0
     )
 
     if use_radius:
-        all_results = query.order_by(desc(models.Tender.scraped_at)).all()
-        filtered = []
-        for t in all_results:
-            if t.lat is not None and t.lng is not None:
-                d = _haversine_km(request.user_lat, request.user_lng, t.lat, t.lng)
-                if d <= request.radius_km:
-                    filtered.append((t, d))
-            else:
-                # Soft-include tenders with no coordinates (sorted to the end)
-                filtered.append((t, 99999))
+        # FIX: Bounding box pre-filter cuts the in-memory candidate set from
+        # the full table down to the geographic area of interest before haversine.
+        # Tenders without coordinates are fetched separately and appended at end.
+        bbox_query     = _bbox_filter(query, search.user_lat, search.user_lng, search.radius_km)
+        coordinated    = bbox_query.order_by(desc(models.Tender.scraped_at)).all()
+        uncoordinated  = (
+            query
+            .filter(or_(models.Tender.lat.is_(None), models.Tender.lng.is_(None)))
+            .order_by(desc(models.Tender.scraped_at))
+            .all()
+        )
 
-        filtered.sort(key=lambda x: (x[1] == 99999, x[1]))
-        total = len(filtered)
-        page_items = [
-            t for t, _ in
-            filtered[(request.page - 1) * request.page_size: request.page * request.page_size]
-        ]
+        # Haversine pass on bbox-filtered coordinated tenders
+        in_radius = []
+        for t in coordinated:
+            d = _haversine_km(search.user_lat, search.user_lng, t.lat, t.lng)
+            if d <= search.radius_km:
+                in_radius.append((t, d))
+
+        # Sort by distance, then append uncoordinated tenders at end
+        in_radius.sort(key=lambda x: x[1])
+        filtered = in_radius + [(t, None) for t in uncoordinated]
+
+        total      = len(filtered)
+        start      = (search.page - 1) * search.page_size
+        page_items = [t for t, _ in filtered[start: start + search.page_size]]
+
     else:
-        total = query.count()
+        total      = query.count()
         page_items = (
-            query.order_by(desc(models.Tender.scraped_at))
-            .offset((request.page - 1) * request.page_size)
-            .limit(request.page_size)
+            query
+            .order_by(desc(models.Tender.scraped_at))
+            .offset((search.page - 1) * search.page_size)
+            .limit(search.page_size)
             .all()
         )
 
     # -------------------------------------------------------------------------
-    # FIX: Charge based on actual results returned, not page_size
-    # Also cap charge so user can't go negative
+    # Charge credits — based on actual results, capped at current balance
     # -------------------------------------------------------------------------
     credits_charged = min(
-        len(page_items) * CREDITS_PER_RESULT,
-        current_user.credit_balance  # never charge more than they have
+        Decimal(str(len(page_items))) * CREDITS_PER_RESULT,
+        balance,
     )
-    current_user.credit_balance -= credits_charged
+    current_user.credit_balance = float(balance - credits_charged)
 
     db.add(models.Transaction(
         user_id=current_user.id,
@@ -191,38 +256,61 @@ def search_tenders(
     db.add(models.SearchLog(
         user_id=current_user.id,
         query_params={
-            "industries":     request.industries,
-            "provinces":      request.provinces,
-            "municipalities": request.municipalities,
-            "towns":          request.towns,
-            "keyword":        request.keyword,
-            "user_lat":       request.user_lat,
-            "user_lng":       request.user_lng,
-            "radius_km":      request.radius_km,
+            "industries":     search.industries,
+            "provinces":      search.provinces,
+            "municipalities": search.municipalities,
+            "towns":          search.towns,
+            "keyword":        search.keyword,
+            "user_lat":       search.user_lat,
+            "user_lng":       search.user_lng,
+            "radius_km":      search.radius_km,
         },
         result_count=len(page_items),
         credits_charged=credits_charged,
     ))
     db.commit()
 
+    logger.info(
+        f"[SEARCH] user={current_user.id} results={len(page_items)} "
+        f"charged={credits_charged} balance={balance - credits_charged} "
+        f"filters=industries:{len(search.industries)} "
+        f"provinces:{len(search.provinces)} "
+        f"keyword:{bool(search.keyword)} "
+        f"radius:{search.radius_km}"
+    )
+
     return {
         "total":           total,
-        "page":            request.page,
-        "page_size":       request.page_size,
+        "page":            search.page,
+        "page_size":       search.page_size,
         "results":         page_items,
-        "credits_charged": credits_charged,
+        "credits_charged": float(credits_charged),
     }
 
 
-@router.get("/history")
+# =============================================================================
+# SEARCH HISTORY
+# =============================================================================
+
+@router.get("/history", response_model=list[schemas.SearchHistoryOut])
 def search_history(
+    skip:  int = Query(default=0,  ge=0),
+    limit: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(auth_utils.get_current_user)
+    current_user: models.User = Depends(auth_utils.get_current_user),
 ):
+    """
+    Return the current user's search history with pagination.
+
+    FIX: Added response_model — previously returned raw ORM objects
+    with no schema validation, exposing internal fields.
+    FIX: Added skip/limit pagination — previously hardcoded limit=20.
+    """
     return (
         db.query(models.SearchLog)
         .filter(models.SearchLog.user_id == current_user.id)
         .order_by(models.SearchLog.searched_at.desc())
-        .limit(20)
+        .offset(skip)
+        .limit(limit)
         .all()
     )
