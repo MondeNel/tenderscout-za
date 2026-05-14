@@ -469,8 +469,8 @@ def detect_municipality(text: str, province: Optional[str] = None) -> Optional[s
     
     # Check each municipality (word boundary match)
     for mun in candidates:
-        if re.search(r'\b' + re.escape(mun.lower()) + r'\b', text_lower):
-            return mun
+     if re.search(r'\b' + re.escape(mun) + r'\b', text, re.IGNORECASE):
+        return mun
     return None
 
 
