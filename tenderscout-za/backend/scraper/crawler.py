@@ -52,6 +52,11 @@ STRONG_ANCHOR_KEYWORDS = [
     "sourcing", "bids", "tenders",
 ]
 
+# Configuration Constants
+MAX_CONCURRENT_SITES = 5  # Adjust based on your server resources
+DEFAULT_MAX_DEPTH = 3
+DEFAULT_MAX_PAGES = 50
+
 # =============================================================================
 # URL FILTERING — Patterns to skip
 # =============================================================================
@@ -159,24 +164,11 @@ def _should_skip(url: str) -> bool:
     return False
 
 
-def _is_stale_year_url(url: str) -> bool:
-    """
-    Check if URL contains a year parameter that's in the past.
-    
-    Example: ?year=2023 would be stale in 2026.
-    
-    Args:
-        url: URL to check
-        
-    Returns:
-        True if URL references a past year
-    """
-    match = _STALE_YEAR_RE.search(url)
-    if match:
-        year = int(match.group(1))
-        return year < datetime.utcnow().year
-    return False
-
+def _is_stale_year_url(self, url: str) -> bool:
+    current_year = datetime.now().year
+    years = re.findall(r'20\d{2}', url)
+    # Allow current year and previous year for fiscal cycle overlap
+    return any(int(y) < (current_year - 1) for y in years)
 
 def _is_soft_404(final_url: str) -> bool:
     """
@@ -573,53 +565,87 @@ def _persist_crawl_results(db, site_name: str, seed_url: str, urls: List[Dict]):
 # MAIN ENTRY POINT
 # =============================================================================
 
-async def run_crawler(db=None) -> Dict[str, List[Dict]]:
+async def run_crawler(db: Optional[any] = None) -> Dict[str, List[Dict]]:
     """
-    Run the crawler across all CRAWL_TARGETS concurrently.
+    Orchestrates the BFS crawl across all CRAWL_TARGETS with concurrency limiting.
     
-    This is the main entry point that orchestrates crawling all seed URLs.
-    Results are both returned and persisted to the database (if db provided).
-    
-    Args:
-        db: Optional SQLAlchemy database session for persistence
-        
-    Returns:
-        Dictionary mapping site_name → list of discovered URL dicts
+    Implements a Semaphore to prevent overwhelming government servers and 
+    uses modern UTC handling for Python 3.12+.
     """
-    async def crawl_one(target: Dict) -> tuple:
-        """Crawl a single target and return (name, urls)."""
-        try:
-            urls = await crawl_site(
-                seed_url=target["seed_url"],
-                max_depth=target.get("max_depth", 3),
-                max_pages=target.get("max_pages", 50),
-            )
-            
-            # Persist to database if session provided
-            if db is not None and urls:
-                _persist_crawl_results(db, target["name"], target["seed_url"], urls)
-                
-            return target["name"], urls
-        except Exception as e:
-            logger.error(f"[CRAWLER] {target['name']} failed: {e}")
-            return target["name"], []
+    # 1. Initialize concurrency control
+    sem = asyncio.Semaphore(MAX_CONCURRENT_SITES)
+    crawl_index: Dict[str, List[Dict]] = {}
+    
+    # Modern UTC timestamp for logging/metadata
+    start_time = datetime.now(timezone.utc)
+    logger.info(f"[CRAWLER] Starting batch crawl for {len(CRAWL_TARGETS)} targets at {start_time}")
 
-    # Run all crawls concurrently
+    async def crawl_one(target: Dict) -> tuple:
+        """
+        Wrapped crawler logic for a single municipality.
+        Uses a semaphore to limit simultaneous connections.
+        """
+        name = target.get("name", "Unknown")
+        seed = target.get("seed_url")
+        
+        async with sem:
+            try:
+                logger.info(f"[CRAWLER] [{name}] Queueing crawl...")
+                
+                # Execute the BFS crawl
+                urls = await crawl_site(
+                    seed_url=seed,
+                    max_depth=target.get("max_depth", DEFAULT_MAX_DEPTH),
+                    max_pages=target.get("max_pages", DEFAULT_MAX_PAGES),
+                )
+                
+                # Immediate Persistence: Don't wait for the whole batch to finish
+                if db is not None and urls:
+                    try:
+                        # Ensure your persistence logic handles session commits safely
+                        _persist_crawl_results(db, name, seed, urls)
+                        logger.success(f"[CRAWLER] [{name}] Persisted {len(urls)} URLs.")
+                    except Exception as db_err:
+                        logger.error(f"[DATABASE] [{name}] Persistence failed: {db_err}")
+                
+                return name, urls
+
+            except Exception as e:
+                logger.error(f"[CRAWLER] [{name}] Failed during execution: {str(e)}")
+                return name, []
+
+    # 2. Create tasks with the Semaphore wrapper
     tasks = [crawl_one(t) for t in CRAWL_TARGETS]
+    
+    # 3. Execute concurrently and gather results
+    # return_exceptions=True prevents one crash from killing the whole batch
     results_raw = await asyncio.gather(*tasks, return_exceptions=True)
 
-    # Process results
-    crawl_index: Dict[str, List[Dict]] = {}
+    # 4. Post-processing and Metric Reporting
     for item in results_raw:
         if isinstance(item, Exception):
-            logger.error(f"[CRAWLER] Site task failed: {item}")
+            # This handles errors that occurred outside the try/except in crawl_one
+            logger.critical(f"[CRAWLER] Fatal task error: {item}")
             continue
             
         name, urls = item
         crawl_index[name] = urls
-        logger.info(f"[CRAWLER] {name}: {len(urls)} discovered URLs")
+        if urls:
+            logger.info(f"[CRAWLER] [{name}] Completed: {len(urls)} URLs found.")
+        else:
+            logger.warning(f"[CRAWLER] [{name}] Completed: 0 URLs found.")
 
+    # 5. Final Summary
     total_urls = sum(len(urls) for urls in crawl_index.values())
-    logger.info(f"[CRAWLER] TOTAL: {total_urls} URLs across {len(crawl_index)} sites")
+    duration = (datetime.now(timezone.utc) - start_time).total_seconds()
+    
+    logger.info(
+        f"--- [CRAWLER SUMMARY] ---\n"
+        f"Total Sites Attempted: {len(CRAWL_TARGETS)}\n"
+        f"Sites with Data:      {len([v for v in crawl_index.values() if v])}\n"
+        f"Total URLs Discovered: {total_urls}\n"
+        f"Execution Time:        {duration:.2f}s\n"
+        f"-------------------------"
+    )
     
     return crawl_index
