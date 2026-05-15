@@ -10,14 +10,11 @@ from datetime import datetime
 # SHARED CONFIG
 # =============================================================================
 # All ORM-backed schemas inherit this so we don't repeat model_config everywhere.
-# json_encoders ensures Decimal values serialise to float in JSON responses
-# instead of throwing a TypeError.
+# Decimal values are converted to float via field validators, not json_encoders,
+# because json_encoders was removed in Pydantic v2.
 
 class _OrmBase(BaseModel):
-    model_config = ConfigDict(
-        from_attributes=True,
-        json_encoders={Decimal: float},
-    )
+    model_config = ConfigDict(from_attributes=True)
 
 
 # =============================================================================
@@ -78,7 +75,7 @@ class UserOut(_OrmBase):
     id:                      int
     email:                   str
     full_name:               str
-    credit_balance:          float           # serialised from Decimal via json_encoders
+    credit_balance:          float
     industry_preferences:    List[str] = []
     province_preferences:    List[str] = []
     town_preferences:        List[str] = []
@@ -89,24 +86,29 @@ class UserOut(_OrmBase):
     search_radius_km:        int             = 100
     created_at:              datetime
 
-    # FIX: JSON columns in the model can be None when the user was created
-    # before preferences were set. Coerce None → [] so the frontend never
-    # receives null for list fields.
-    @model_validator(mode="after")
-    def coerce_list_fields(self) -> "UserOut":
-        for field in ("industry_preferences", "province_preferences",
-                      "town_preferences", "municipality_preferences"):
-            if getattr(self, field) is None:
-                setattr(self, field, [])
-        return self
+    # ── FIX: Coerce None → [] BEFORE list validation (mode="before") ──────
+    @field_validator("industry_preferences", "province_preferences",
+                     "town_preferences", "municipality_preferences",
+                     mode="before")
+    @classmethod
+    def none_to_empty_list(cls, v):
+        """SQLite stores JSON nulls — turn them into empty lists."""
+        if v is None:
+            return []
+        return v
+
+    # ── FIX: Decimal → float BEFORE validation (mode="before") ────────────
+    @field_validator("credit_balance", mode="before")
+    @classmethod
+    def coerce_decimal(cls, v):
+        if isinstance(v, Decimal):
+            return float(v)
+        return v
 
 
 # =============================================================================
 # USER PREFERENCES
 # =============================================================================
-# FIX: Previously defined but unused — user.py accepted a raw dict.
-# Now used as the actual request body schema for PUT /user/preferences,
-# providing validation instead of silently accepting arbitrary keys.
 
 class UserPreferences(BaseModel):
     industry_preferences:     Optional[List[str]]  = None
@@ -149,8 +151,6 @@ class CreditBalance(BaseModel):
     rand_value: float
 
 
-# FIX: validate package at schema level — previously any string was accepted
-# and the backend threw a raw 400 with no helpful message.
 class TopUpRequest(BaseModel):
     package: Literal["100", "250", "500"]
 
@@ -184,7 +184,6 @@ class TenderOut(_OrmBase):
     document_url:      Optional[str]      = None
     is_active:         bool               = True
     scraped_at:        Optional[datetime] = None
-    # FIX: expose lat/lng so the frontend map can use real coordinates
     lat:               Optional[float]    = None
     lng:               Optional[float]    = None
 
@@ -195,7 +194,6 @@ class TenderLatestResponse(BaseModel):
 
 
 class TenderStatsResponse(BaseModel):
-    """Statistics about tenders in the database. (endpoint not yet implemented)"""
     total_tenders:   int
     active_tenders:  int
     expired_tenders: int
@@ -217,9 +215,6 @@ class SearchRequest(BaseModel):
     keyword:        Optional[str]   = None
     user_lat:       Optional[float] = None
     user_lng:       Optional[float] = None
-    # FIX: default None instead of 100 — sending radius_km=100 with no
-    # lat/lng caused confusing server-side behaviour on every search.
-    # Radius is only meaningful when coordinates are also provided.
     radius_km:      Optional[float] = None
     page:           int             = 1
     page_size:      int             = 20
@@ -255,7 +250,6 @@ class SearchRequest(BaseModel):
 
     @model_validator(mode="after")
     def radius_requires_coords(self) -> "SearchRequest":
-        """Radius without coordinates is meaningless — clear it silently."""
         if self.radius_km is not None:
             if self.user_lat is None or self.user_lng is None:
                 self.radius_km = None
@@ -348,7 +342,7 @@ class PendingCrawlUrlsResponse(BaseModel):
 
 
 # =============================================================================
-# DASHBOARD / ADMIN SCHEMAS  (endpoints not yet implemented)
+# DASHBOARD / ADMIN SCHEMAS
 # =============================================================================
 
 class DashboardStatsResponse(BaseModel):
@@ -365,7 +359,7 @@ class DashboardStatsResponse(BaseModel):
 
 
 class HealthCheckResponse(BaseModel):
-    status:    str   # "healthy" | "degraded" | "unhealthy"
+    status:    str
     database:  bool
     scrapers:  ScraperStatusSummary
     crawlers:  CrawlStatsResponse
@@ -373,7 +367,7 @@ class HealthCheckResponse(BaseModel):
 
 
 # =============================================================================
-# REFERENCE DATA SCHEMAS  (endpoints not yet implemented)
+# REFERENCE DATA SCHEMAS
 # =============================================================================
 
 class ProvinceOut(BaseModel):
@@ -413,7 +407,6 @@ class ReferenceDataResponse(BaseModel):
 # =============================================================================
 
 class SearchHistoryOut(_OrmBase):
-    """Single search log entry returned by GET /search/history."""
     id:              int
     query_params:    dict              = {}
     result_count:    int               = 0
