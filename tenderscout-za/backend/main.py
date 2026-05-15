@@ -202,9 +202,18 @@ app.include_router(proxy_router)
 # =============================================================================
 
 @app.get("/health", tags=["system"])
-def health_check(db: Session = Depends(get_db)):
-    """Lightweight health check for load balancers and uptime monitors."""
+def health_check():
+    """
+    Lightweight health check for load balancers and uptime monitors.
+
+    FIX: No longer uses Depends(get_db) — the health endpoint must work even
+    when FastAPI's dependency injection would fail (e.g. missing DB driver).
+    Opens its own short-lived session and closes it safely.
+    """
+    db = None
     try:
+        from database import SessionLocal
+        db = SessionLocal()
         total  = db.query(models.Tender).count()
         active = db.query(models.Tender).filter(models.Tender.is_active == True).count()
         return {
@@ -225,6 +234,9 @@ def health_check(db: Session = Depends(get_db)):
                 "timestamp":    datetime.now(timezone.utc).isoformat(),
             },
         )
+    finally:
+        if db:
+            db.close()
 
 
 # =============================================================================
