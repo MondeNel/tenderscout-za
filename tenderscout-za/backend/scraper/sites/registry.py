@@ -2,7 +2,7 @@
 scraper/sites/registry.py
 ==========================
 SINGLE SOURCE OF TRUTH for all tender sources.
-Last verified: 2026-04-22
+Last verified: 2026-05-15
 
 This file centralizes ALL website configurations. The orchestrator reads from
 this registry to know what to scrape.
@@ -25,8 +25,8 @@ SCRAPE TYPES:
     kareeberg           Static .htm page with RFQ links
     siyancuma           PDF-link scraper (Siyancuma-specific)
     frances_baard       Card layout with download buttons
-    js_playwright       JS-rendered site — Playwright required
-    etenders_playwright eTenders-specific Playwright scraper
+    js_playwright       JS-rendered site — Playwright required (js_scraper.py)
+    etenders_playwright eTenders-specific Playwright scraper (etenders.py)
 """
 
 from typing import List, Dict
@@ -382,7 +382,7 @@ ACTIVE_SOURCES: List[Dict] = [
     },
 
     # =========================================================================
-    # NORTHERN CAPE (8 sources — reduced from 20+ to balance)
+    # NORTHERN CAPE (8 sources)
     # =========================================================================
     {
         "name": "Northern Cape Provincial Government",
@@ -434,21 +434,35 @@ ACTIVE_SOURCES: List[Dict] = [
     },
 
     # =========================================================================
-    # AGGREGATORS — Nationwide Coverage
+    # AGGREGATORS — Nationwide Coverage (including JS scrapers)
     # =========================================================================
     {
         "name": "EasyTenders",
         "url": "https://easytenders.co.za/tenders",
         "province": None, "town": None,
         "scrape_type": "js_playwright", "allow_province_detection": True,
-        "notes": "⭐ ALL 9 provinces — scrapes each province page",
+        "notes": "All 9 provinces — scraped via js_scraper.py",
+    },
+    {
+        "name": "OnlineTenders",
+        "url": "https://www.onlinetenders.co.za/tenders",
+        "province": None, "town": None,
+        "scrape_type": "js_playwright", "allow_province_detection": True,
+        "notes": "Province-specific pages — scraped via js_scraper.py",
+    },
+    {
+        "name": "sa-tenders.co.za",
+        "url": "https://sa-tenders.co.za/tenders",
+        "province": None, "town": None,
+        "scrape_type": "js_playwright", "allow_province_detection": True,
+        "notes": "National aggregator — scraped via js_scraper.py",
     },
     {
         "name": "eTenders Portal (National)",
         "url": "https://www.etenders.gov.za/Home/opportunities?id=1",
         "province": None, "town": None,
         "scrape_type": "etenders_playwright", "allow_province_detection": True,
-        "notes": "⭐ Official government portal — nationwide tenders",
+        "notes": "Official government portal — scraped via etenders.py",
     },
     {
         "name": "Municipalities.co.za",
@@ -464,20 +478,8 @@ ACTIVE_SOURCES: List[Dict] = [
 # =============================================================================
 
 BROKEN_SOURCES: List[Dict] = [
-    {
-        "name": "OnlineTenders (Northern Cape)",
-        "url": "https://www.onlinetenders.co.za/tenders/northern-cape",
-        "province": "Northern Cape", "town": None,
-        "scrape_type": "js_playwright", "allow_province_detection": True,
-        "notes": "Returns 0 results — needs selector debugging",
-    },
-    {
-        "name": "sa-tenders.co.za",
-        "url": "https://sa-tenders.co.za/tenders",
-        "province": None, "town": None,
-        "scrape_type": "js_playwright", "allow_province_detection": True,
-        "notes": "Timeout issues — needs investigation",
-    },
+    # (OnlineTenders and sa-tenders have been moved to ACTIVE)
+    # Add any genuinely broken sources here
 ]
 
 # =============================================================================
