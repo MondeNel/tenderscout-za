@@ -123,33 +123,17 @@ def get_enhanced_headers() -> Dict[str, str]:
 # =============================================================================
 
 def _parse_row(row, base_url: str, source: Dict) -> Optional[Dict]:
-    """
-    Parse a single tender row/item into a standardized tender dictionary.
-    
-    Args:
-        row: BeautifulSoup element representing a single tender row
-        base_url: Base URL of the page (for resolving relative links)
-        source: Source configuration dictionary with selectors
-        
-    Returns:
-        Standardized tender dict, or None if invalid/filtered out
-    """
     sel = source["selectors"]
 
-    # -------------------------------------------------------------------------
-    # Extract title (required)
-    # -------------------------------------------------------------------------
+    # Title
     title_el = row.select_one(sel["title"])
     if not title_el:
         return None
-        
     title = clean_text(title_el.get_text())
     if not title or len(title) < 8:
         return None
 
-    # -------------------------------------------------------------------------
-    # Extract detail page link
-    # -------------------------------------------------------------------------
+    # Detail link
     link_el = row.select_one(sel["link"])
     if link_el and link_el.get("href"):
         detail_url = link_el["href"]
@@ -158,56 +142,36 @@ def _parse_row(row, base_url: str, source: Dict) -> Optional[Dict]:
     else:
         detail_url = base_url
 
-    # -------------------------------------------------------------------------
-    # Helper to safely extract text using a selector
-    # -------------------------------------------------------------------------
     def _extract(selector: str) -> str:
         if not selector:
             return ""
         el = row.select_one(selector)
         return clean_text(el.get_text()) if el else ""
 
-    # -------------------------------------------------------------------------
-    # Extract other fields
-    # -------------------------------------------------------------------------
     description  = _extract(sel.get("description", ""))
     closing_date = _extract(sel.get("closing_date", ""))
     issuing_body = _extract(sel.get("issuing_body", ""))
 
-    # -------------------------------------------------------------------------
-    # Extract document download link (PDF, DOC, etc.)
-    # -------------------------------------------------------------------------
+    # Document link
     doc_el = row.select_one(sel.get("doc_link", "")) if sel.get("doc_link") else None
     document_url = doc_el.get("href") if doc_el else None
     if document_url and not document_url.startswith("http"):
         document_url = urljoin(base_url, document_url)
 
-    # -------------------------------------------------------------------------
-    # Skip expired tenders
-    # -------------------------------------------------------------------------
+    # Expiry
     if closing_date and is_closing_date_expired(closing_date):
         logger.debug(f"[BULLETINS] Skipping expired: {title[:50]}")
         return None
 
-    # -------------------------------------------------------------------------
-    # Geographic detection
-    # -------------------------------------------------------------------------
-    # Combine all text fields for better detection accuracy
+    # Detection
     full_text = f"{title} {description} {issuing_body}"
-    
-    province = source.get("province_hint") or detect_province(full_text)
-    municipality = detect_municipality(full_text, province)
-    town = detect_town(full_text, province)
+    province = source.get("province_hint") or detect_province(full_text) or ""
+    municipality = detect_municipality(full_text, province) or ""
+    town = detect_town(full_text, province) or ""
 
-    # -------------------------------------------------------------------------
-    # Extract source site domain
-    # -------------------------------------------------------------------------
     parsed = urlparse(source["url"])
     source_site = parsed.netloc.replace("www.", "")
 
-    # -------------------------------------------------------------------------
-    # Build result
-    # -------------------------------------------------------------------------
     return {
         "title":             title,
         "description":       description or f"Tender from {source['name']}",
@@ -217,15 +181,16 @@ def _parse_row(row, base_url: str, source: Dict) -> Optional[Dict]:
         "town":              town,
         "industry_category": detect_industry(full_text),
         "closing_date":      closing_date,
-        "posted_date":       "",  # Bulletin sites rarely show posted dates
+        "posted_date":       "",
         "source_url":        detail_url,
         "document_url":      document_url,
         "source_site":       source_site,
         "reference_number":  "",
         "contact_info":      "",
-        "content_hash":      make_content_hash(title, detail_url),
+        "content_hash":      make_content_hash(title, detail_url, closing_date),
+        "lat":               None,
+        "lng":               None,
     }
-
 
 # =============================================================================
 # PAGE SCRAPER (with retry logic)
