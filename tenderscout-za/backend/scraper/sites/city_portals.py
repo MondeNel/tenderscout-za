@@ -294,7 +294,7 @@ def _build_result(
         "source_site": urlparse(city["url"]).netloc.replace("www.", ""),
         "reference_number": "",
         "contact_info": "",
-        "content_hash": make_content_hash(title, source_url),  # ← Use new source_url
+        "content_hash": make_content_hash(title, source_url, closing_date or ""),
     }
 
 
