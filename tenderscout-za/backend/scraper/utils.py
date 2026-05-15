@@ -439,24 +439,10 @@ def detect_province(text: str) -> Optional[str]:
 
 
 def detect_municipality(text: str, province: Optional[str] = None) -> Optional[str]:
-    """
-    Detect municipality from tender text.
-
-    FIX: Fixed broken indentation — the re.search() call was one level
-    short, making it execute unconditionally rather than inside the for loop.
-    FIX: Removed unused text_lower variable.
-    """
     if not text:
         return None
-
-    candidates = (
-        MUNICIPALITIES.get(province, [])
-        if province
-        else [m for lst in MUNICIPALITIES.values() for m in lst]
-    )
-
+    candidates = (...)
     for mun in candidates:
-        # FIX: Correct indentation — was misaligned causing wrong scoping
         if re.search(r'\b' + re.escape(mun) + r'\b', text, re.IGNORECASE):
             return mun
     return None
