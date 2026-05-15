@@ -19,9 +19,6 @@ from typing import Dict, List, Optional
 # =============================================================================
 # HTTP HEADERS
 # =============================================================================
-# FIX: Module-level constant — was recreated as a new dict on every call
-# to get_headers(), which is invoked on every HTTP request.
-
 REQUEST_HEADERS: dict = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -33,18 +30,13 @@ REQUEST_HEADERS: dict = {
     "Cache-Control":   "no-cache",
 }
 
-
 def get_headers() -> dict:
     """Return browser-like HTTP headers. Kept as a function for backwards compatibility."""
     return REQUEST_HEADERS
 
-
 # =============================================================================
 # INDUSTRY DETECTION
 # =============================================================================
-# First match wins — more specific categories listed before general ones.
-# Returns None (not "General") when no match — keeps DB clean.
-
 INDUSTRY_KEYWORDS: Dict[str, List[str]] = {
     "Security, Access, Alarms & Fire": [
         "security", "guarding", "cctv", "access control", "surveillance",
@@ -175,7 +167,6 @@ INDUSTRY_KEYWORDS: Dict[str, List[str]] = {
 # =============================================================================
 # PROVINCE DETECTION
 # =============================================================================
-
 PROVINCE_KEYWORDS: Dict[str, List[str]] = {
     "Gauteng": [
         "gauteng", "johannesburg", "pretoria", "ekurhuleni", "soweto",
@@ -220,7 +211,6 @@ PROVINCE_KEYWORDS: Dict[str, List[str]] = {
 # =============================================================================
 # MUNICIPALITIES
 # =============================================================================
-
 MUNICIPALITIES: Dict[str, List[str]] = {
     "Eastern Cape": [
         "Buffalo City", "Nelson Mandela Bay", "Chris Hani", "Joe Gqabi",
@@ -272,7 +262,6 @@ MUNICIPALITIES: Dict[str, List[str]] = {
 # =============================================================================
 # TOWNS
 # =============================================================================
-
 TOWNS: Dict[str, List[str]] = {
     "Gauteng": [
         "Johannesburg", "Pretoria", "Centurion", "Midrand", "Sandton", "Soweto",
@@ -320,7 +309,6 @@ TOWNS: Dict[str, List[str]] = {
 # =============================================================================
 # DATE PARSING
 # =============================================================================
-
 _DATE_FORMATS: list[str] = [
     "%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d",
     "%d %B %Y", "%d %b %Y",
@@ -338,26 +326,17 @@ _DATE_EXTRACT_RE = re.compile(
     re.IGNORECASE,
 )
 
-
 def parse_date(text: str) -> Optional[datetime]:
-    """
-    Parse a date string into a timezone-aware datetime.
-
-    FIX: Returns datetime (not date) to match the DateTime DB column type.
-    FIX: Returns timezone-aware datetime to prevent comparison errors.
-    Returns None if parsing fails — caller decides what to do.
-    """
+    """Parse a date string into a timezone-aware datetime."""
     if not text:
         return None
     text = text.strip()
-
     for fmt in _DATE_FORMATS:
         try:
             dt = datetime.strptime(text, fmt)
             return dt.replace(tzinfo=timezone.utc)
         except ValueError:
             continue
-
     match = _DATE_EXTRACT_RE.search(text)
     if match:
         candidate = match.group(0)
@@ -367,57 +346,28 @@ def parse_date(text: str) -> Optional[datetime]:
                 return dt.replace(tzinfo=timezone.utc)
             except ValueError:
                 continue
-
     return None
 
-
 def is_closing_date_expired(closing_date_str: str) -> bool:
-    """
-    Return True if the closing date is parseable AND in the past.
-    Returns False on parse failure (keep tender to be safe).
-    """
+    """Return True if the closing date is parseable AND in the past."""
     parsed = parse_date(closing_date_str)
     if parsed is None:
         return False
     return parsed < datetime.now(timezone.utc)
 
-
 # =============================================================================
 # CONTENT HASH
 # =============================================================================
-
 def make_content_hash(title: str, url: str, closing_date: str = "") -> str:
-    """
-    Create a deduplication hash for a tender.
-
-    FIX: Include closing_date in the hash. Without it, a reissued tender
-    with the same title and URL but a new closing date gets the same hash
-    and the updated version is silently dropped as a duplicate.
-
-    Args:
-        title:        Tender title
-        url:          Source URL
-        closing_date: Closing date string (optional but recommended)
-
-    Returns:
-        32-character MD5 hash
-    """
+    """Create a deduplication hash for a tender, including closing date."""
     key = f"{title.lower().strip()}|{url.lower().strip()}|{closing_date.lower().strip()}"
     return hashlib.md5(key.encode()).hexdigest()
-
 
 # =============================================================================
 # DETECTION HELPERS
 # =============================================================================
-
 def detect_industry(text: str) -> Optional[str]:
-    """
-    Detect industry category from tender text.
-
-    FIX: Returns None (not "General") when no match is found.
-    "General" was a fake category that polluted filters and analytics.
-    The DB column is nullable — use None to mean unclassified.
-    """
+    """Detect industry category from tender text. Returns None if no match."""
     if not text:
         return None
     t = text.lower()
@@ -426,9 +376,8 @@ def detect_industry(text: str) -> Optional[str]:
             return industry
     return None
 
-
 def detect_province(text: str) -> Optional[str]:
-    """Detect province from tender text. Used for aggregators only."""
+    """Detect province from tender text."""
     if not text:
         return None
     t = text.lower()
@@ -437,22 +386,27 @@ def detect_province(text: str) -> Optional[str]:
             return province
     return None
 
-
 def detect_municipality(text: str, province: Optional[str] = None) -> Optional[str]:
+    """
+    Detect municipality from tender text.
+    FIX: Removed accidental Ellipsis and aligned with detect_town logic.
+    """
     if not text:
         return None
-    candidates = (...)
+
+    candidates = (
+        MUNICIPALITIES.get(province, [])
+        if province
+        else [m for lst in MUNICIPALITIES.values() for m in lst]
+    )
+
     for mun in candidates:
         if re.search(r'\b' + re.escape(mun) + r'\b', text, re.IGNORECASE):
             return mun
     return None
 
-
 def detect_town(text: str, province: Optional[str] = None) -> Optional[str]:
-    """
-    Detect town from tender text.
-    FIX: Removed unused text_lower variable.
-    """
+    """Detect town from tender text."""
     if not text:
         return None
 
@@ -467,55 +421,34 @@ def detect_town(text: str, province: Optional[str] = None) -> Optional[str]:
             return town
     return None
 
-
 def clean_text(text: str) -> str:
-    """Collapse whitespace and strip. Returns empty string for None/empty input."""
+    """Collapse whitespace and strip."""
     if not text:
         return ""
     return re.sub(r'\s+', ' ', text).strip()
 
-
 # =============================================================================
 # EXPIRY HEURISTIC
 # =============================================================================
-
 def is_likely_expired(text: str, url: str) -> bool:
-    """
-    Heuristic: return True if text/URL contains years older than last year.
-
-    FIX: CURRENT_YEAR was hardcoded to 2026. Now derived at call time so
-    the function stays correct across calendar years without code changes.
-
-    FIX: Previous range was range(2018, CURRENT_YEAR - 1) which excluded
-    the previous year. A 2025 tender is expired in 2027 — this now uses
-    current_year - 1 as the cutoff correctly.
-    """
+    """Heuristic: return True if text/URL contains old years."""
     current_year = datetime.now(timezone.utc).year
-    combined     = (text + " " + url).lower()
-    old_years    = [str(y) for y in range(2018, current_year - 1)]
+    combined = (text + " " + url).lower()
+    old_years = [str(y) for y in range(2018, current_year - 1)]
     return any(year in combined for year in old_years)
-
 
 # =============================================================================
 # URL HEALTH CHECK
 # =============================================================================
-
 async def url_is_alive(url: str) -> bool:
-    """
-    Check if a URL returns a non-error HTTP status.
-
-    FIX: verify=False removed — use default TLS verification.
-    Known-broken SSL domains should be handled at the call site.
-    """
+    """Check if a URL returns a non-error HTTP status."""
     import httpx
     try:
         async with httpx.AsyncClient(
-            timeout=8,
-            verify=True,             # FIX: no global SSL bypass
-            follow_redirects=True,
+            timeout=8, verify=True, follow_redirects=True,
         ) as client:
             r = await client.head(url)
-            if r.status_code == 405:  # HEAD not allowed — try GET
+            if r.status_code == 405:
                 r = await client.get(url)
             return r.status_code < 400
     except Exception:

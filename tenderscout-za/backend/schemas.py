@@ -1,68 +1,75 @@
 from __future__ import annotations
 
-from decimal import Decimal
-from pydantic import BaseModel, EmailStr, ConfigDict, field_validator, model_validator
-from typing import Optional, List, Literal
 from datetime import datetime
+from decimal import Decimal
+from typing import List, Literal, Optional
+
+from pydantic import BaseModel, ConfigDict, EmailStr, field_validator, model_validator
 
 
-# =============================================================================
-# SHARED CONFIG
-# =============================================================================
-# All ORM-backed schemas inherit this so we don't repeat model_config everywhere.
-# Decimal values are converted to float via field validators, not json_encoders,
-# because json_encoders was removed in Pydantic v2.
+# ---------------------------------------------------------------------------
+# Shared config
+# ---------------------------------------------------------------------------
 
 class _OrmBase(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-# =============================================================================
-# AUTHENTICATION SCHEMAS
-# =============================================================================
+# ---------------------------------------------------------------------------
+# Shared coordinate validator mixin
+# Avoids duplicating lat/lng/radius validators across UserRegister and
+# UserPreferences — just inherit _LocationMixin.
+# ---------------------------------------------------------------------------
 
-class Token(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
-
-
-class UserRegister(BaseModel):
-    email:             EmailStr
-    full_name:         str
-    password:          str
-    province:          Optional[str]   = None
-    town:              Optional[str]   = None
-    business_location: Optional[str]   = None
-    business_lat:      Optional[float] = None
-    business_lng:      Optional[float] = None
-
-    @field_validator("password")
-    @classmethod
-    def password_strength(cls, v: str) -> str:
-        if len(v) < 8:
-            raise ValueError("Password must be at least 8 characters")
-        return v
-
-    @field_validator("full_name")
-    @classmethod
-    def name_not_empty(cls, v: str) -> str:
-        v = v.strip()
-        if not v:
-            raise ValueError("Full name cannot be blank")
-        return v
+class _LocationMixin(BaseModel):
+    business_lat: Optional[float] = None
+    business_lng: Optional[float] = None
 
     @field_validator("business_lat")
     @classmethod
-    def validate_lat(cls, v: Optional[float]) -> Optional[float]:
+    def _check_lat(cls, v: Optional[float]) -> Optional[float]:
         if v is not None and not (-90 <= v <= 90):
             raise ValueError("Latitude must be between -90 and 90")
         return v
 
     @field_validator("business_lng")
     @classmethod
-    def validate_lng(cls, v: Optional[float]) -> Optional[float]:
+    def _check_lng(cls, v: Optional[float]) -> Optional[float]:
         if v is not None and not (-180 <= v <= 180):
             raise ValueError("Longitude must be between -180 and 180")
+        return v
+
+
+# ---------------------------------------------------------------------------
+# Auth
+# ---------------------------------------------------------------------------
+
+class Token(BaseModel):
+    access_token: str
+    token_type:   str = "bearer"
+
+
+class UserRegister(_LocationMixin):
+    email:             EmailStr
+    full_name:         str
+    password:          str
+    province:          Optional[str]   = None
+    town:              Optional[str]   = None
+    business_location: Optional[str]   = None
+
+    @field_validator("password")
+    @classmethod
+    def _password_strength(cls, v: str) -> str:
+        if len(v) < 8:
+            raise ValueError("Password must be at least 8 characters")
+        return v
+
+    @field_validator("full_name")
+    @classmethod
+    def _name_not_empty(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("Full name cannot be blank")
         return v
 
 
@@ -72,79 +79,58 @@ class UserLogin(BaseModel):
 
 
 class UserOut(_OrmBase):
-    id:                      int
-    email:                   str
-    full_name:               str
-    credit_balance:          float
-    industry_preferences:    List[str] = []
-    province_preferences:    List[str] = []
-    town_preferences:        List[str] = []
-    municipality_preferences:List[str] = []
-    business_location:       Optional[str]   = None
-    business_lat:            Optional[float] = None
-    business_lng:            Optional[float] = None
-    search_radius_km:        int             = 100
-    created_at:              datetime
+    id:                       int
+    email:                    str
+    full_name:                str
+    credit_balance:           float
+    industry_preferences:     List[str] = []
+    province_preferences:     List[str] = []
+    town_preferences:         List[str] = []
+    municipality_preferences: List[str] = []
+    business_location:        Optional[str]   = None
+    business_lat:             Optional[float] = None
+    business_lng:             Optional[float] = None
+    search_radius_km:         int             = 100
+    created_at:               datetime
 
-    # ── FIX: Coerce None → [] BEFORE list validation (mode="before") ──────
-    @field_validator("industry_preferences", "province_preferences",
-                     "town_preferences", "municipality_preferences",
-                     mode="before")
+    @field_validator(
+        "industry_preferences", "province_preferences",
+        "town_preferences", "municipality_preferences",
+        mode="before",
+    )
     @classmethod
-    def none_to_empty_list(cls, v):
-        """SQLite stores JSON nulls — turn them into empty lists."""
-        if v is None:
-            return []
-        return v
+    def _none_to_list(cls, v):
+        return v or []
 
-    # ── FIX: Decimal → float BEFORE validation (mode="before") ────────────
     @field_validator("credit_balance", mode="before")
     @classmethod
-    def coerce_decimal(cls, v):
-        if isinstance(v, Decimal):
-            return float(v)
-        return v
+    def _decimal_to_float(cls, v):
+        return float(v) if isinstance(v, Decimal) else v
 
 
-# =============================================================================
-# USER PREFERENCES
-# =============================================================================
+# ---------------------------------------------------------------------------
+# User preferences
+# ---------------------------------------------------------------------------
 
-class UserPreferences(BaseModel):
-    industry_preferences:     Optional[List[str]]  = None
-    province_preferences:     Optional[List[str]]  = None
-    town_preferences:         Optional[List[str]]  = None
-    municipality_preferences: Optional[List[str]]  = None
-    business_location:        Optional[str]         = None
-    business_lat:             Optional[float]       = None
-    business_lng:             Optional[float]       = None
-    search_radius_km:         Optional[int]         = None
-
-    @field_validator("business_lat")
-    @classmethod
-    def validate_lat(cls, v: Optional[float]) -> Optional[float]:
-        if v is not None and not (-90 <= v <= 90):
-            raise ValueError("Latitude must be between -90 and 90")
-        return v
-
-    @field_validator("business_lng")
-    @classmethod
-    def validate_lng(cls, v: Optional[float]) -> Optional[float]:
-        if v is not None and not (-180 <= v <= 180):
-            raise ValueError("Longitude must be between -180 and 180")
-        return v
+class UserPreferences(_LocationMixin):
+    industry_preferences:     Optional[List[str]] = None
+    province_preferences:     Optional[List[str]] = None
+    town_preferences:         Optional[List[str]] = None
+    municipality_preferences: Optional[List[str]] = None
+    business_location:        Optional[str]        = None
+    search_radius_km:         Optional[int]        = None
 
     @field_validator("search_radius_km")
     @classmethod
-    def validate_radius(cls, v: Optional[int]) -> Optional[int]:
+    def _radius_range(cls, v: Optional[int]) -> Optional[int]:
         if v is not None and not (1 <= v <= 1000):
             raise ValueError("search_radius_km must be between 1 and 1000")
         return v
 
 
-# =============================================================================
-# CREDIT / PAYMENT SCHEMAS
-# =============================================================================
+# ---------------------------------------------------------------------------
+# Credits
+# ---------------------------------------------------------------------------
 
 class CreditBalance(BaseModel):
     balance:    float
@@ -162,9 +148,9 @@ class TopUpResponse(BaseModel):
     message:       str
 
 
-# =============================================================================
-# TENDER SCHEMAS
-# =============================================================================
+# ---------------------------------------------------------------------------
+# Tenders
+# ---------------------------------------------------------------------------
 
 class TenderOut(_OrmBase):
     id:                int
@@ -203,9 +189,9 @@ class TenderStatsResponse(BaseModel):
     last_updated:    Optional[datetime] = None
 
 
-# =============================================================================
-# SEARCH SCHEMAS
-# =============================================================================
+# ---------------------------------------------------------------------------
+# Search
+# ---------------------------------------------------------------------------
 
 class SearchRequest(BaseModel):
     industries:     List[str]       = []
@@ -221,38 +207,37 @@ class SearchRequest(BaseModel):
 
     @field_validator("page")
     @classmethod
-    def page_positive(cls, v: int) -> int:
+    def _page_positive(cls, v: int) -> int:
         if v < 1:
             raise ValueError("page must be >= 1")
         return v
 
     @field_validator("page_size")
     @classmethod
-    def page_size_range(cls, v: int) -> int:
+    def _page_size_range(cls, v: int) -> int:
         if not (1 <= v <= 100):
             raise ValueError("page_size must be between 1 and 100")
         return v
 
     @field_validator("keyword")
     @classmethod
-    def keyword_strip(cls, v: Optional[str]) -> Optional[str]:
-        if v is not None:
+    def _keyword_strip(cls, v: Optional[str]) -> Optional[str]:
+        if v:
             v = v.strip()
-            return v if v else None
+            return v or None
         return None
 
     @field_validator("radius_km")
     @classmethod
-    def radius_positive(cls, v: Optional[float]) -> Optional[float]:
+    def _radius_positive(cls, v: Optional[float]) -> Optional[float]:
         if v is not None and v <= 0:
             raise ValueError("radius_km must be positive")
         return v
 
     @model_validator(mode="after")
-    def radius_requires_coords(self) -> "SearchRequest":
-        if self.radius_km is not None:
-            if self.user_lat is None or self.user_lng is None:
-                self.radius_km = None
+    def _radius_requires_coords(self) -> SearchRequest:
+        if self.radius_km is not None and (self.user_lat is None or self.user_lng is None):
+            self.radius_km = None
         return self
 
 
@@ -264,9 +249,9 @@ class SearchResponse(BaseModel):
     credits_charged: float
 
 
-# =============================================================================
-# TRANSACTION SCHEMAS
-# =============================================================================
+# ---------------------------------------------------------------------------
+# Transactions
+# ---------------------------------------------------------------------------
 
 class TransactionOut(_OrmBase):
     id:               int
@@ -276,9 +261,9 @@ class TransactionOut(_OrmBase):
     created_at:       datetime
 
 
-# =============================================================================
-# SCRAPER STATUS SCHEMAS
-# =============================================================================
+# ---------------------------------------------------------------------------
+# Scraper / crawler status
+# ---------------------------------------------------------------------------
 
 class ScraperStatusOut(_OrmBase):
     id:                int
@@ -305,10 +290,6 @@ class ScraperRunResponse(BaseModel):
     errors:        List[str] = []
     run_at:        datetime
 
-
-# =============================================================================
-# CRAWLER SCHEMAS
-# =============================================================================
 
 class CrawlResultOut(_OrmBase):
     id:             int
@@ -341,21 +322,21 @@ class PendingCrawlUrlsResponse(BaseModel):
     urls:  List[CrawlResultOut]
 
 
-# =============================================================================
-# DASHBOARD / ADMIN SCHEMAS
-# =============================================================================
+# ---------------------------------------------------------------------------
+# Dashboard / admin
+# ---------------------------------------------------------------------------
 
 class DashboardStatsResponse(BaseModel):
-    total_users:    int
-    active_users:   int
-    total_tenders:  int
-    active_tenders: int
-    total_searches: int
-    total_revenue:  float
-    scraper_health: ScraperStatusSummary
-    crawler_stats:  CrawlStatsResponse
-    recent_tenders: List[TenderOut]
-    recent_searches:List[dict]
+    total_users:     int
+    active_users:    int
+    total_tenders:   int
+    active_tenders:  int
+    total_searches:  int
+    total_revenue:   float
+    scraper_health:  ScraperStatusSummary
+    crawler_stats:   CrawlStatsResponse
+    recent_tenders:  List[TenderOut]
+    recent_searches: List[dict]
 
 
 class HealthCheckResponse(BaseModel):
@@ -366,9 +347,9 @@ class HealthCheckResponse(BaseModel):
     timestamp: datetime
 
 
-# =============================================================================
-# REFERENCE DATA SCHEMAS
-# =============================================================================
+# ---------------------------------------------------------------------------
+# Reference data
+# ---------------------------------------------------------------------------
 
 class ProvinceOut(BaseModel):
     name:               str
@@ -396,19 +377,19 @@ class IndustryOut(BaseModel):
 
 class ReferenceDataResponse(BaseModel):
     provinces:     List[ProvinceOut]
-    municipalities:List[MunicipalityOut]
+    municipalities: List[MunicipalityOut]
     towns:         List[TownOut]
     industries:    List[IndustryOut]
     last_updated:  datetime
 
 
-# =============================================================================
-# SEARCH HISTORY SCHEMA
-# =============================================================================
+# ---------------------------------------------------------------------------
+# Search history
+# ---------------------------------------------------------------------------
 
 class SearchHistoryOut(_OrmBase):
     id:              int
-    query_params:    dict              = {}
-    result_count:    int               = 0
+    query_params:    dict  = {}
+    result_count:    int   = 0
     credits_charged: float
     searched_at:     datetime

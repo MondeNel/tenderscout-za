@@ -46,7 +46,11 @@ DEFAULT_MAX_PAGES    = 50
 # SSL-exempt domains — known broken/expired certs on SA gov sites
 _SSL_EXEMPT_DOMAINS: frozenset[str] = frozenset([
     "etenders.gov.za",
-    "northern-cape.gov.za",
+    "joburg.org.za",
+    "tshwane.gov.za",
+    "durban.gov.za",
+    "solplaatje.org.za",
+    "nkangaladm.gov.za",
 ])
 
 # =============================================================================

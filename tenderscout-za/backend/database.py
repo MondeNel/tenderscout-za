@@ -1,36 +1,24 @@
-from sqlalchemy import create_engine, event, text
-from sqlalchemy.orm import sessionmaker, DeclarativeBase
-from dotenv import load_dotenv
 import logging
 import os
+
+from dotenv import load_dotenv
+from sqlalchemy import create_engine, event, text
+from sqlalchemy.orm import sessionmaker, DeclarativeBase
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-# =============================================================================
-# DATABASE URL
-# =============================================================================
+# ---------------------------------------------------------------------------
+# URL + dialect detection
+# ---------------------------------------------------------------------------
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./tenderscout.db")
-IS_SQLITE = DATABASE_URL.startswith("sqlite")
+IS_SQLITE    = DATABASE_URL.startswith("sqlite")
 
-# =============================================================================
-# ENGINE CONFIGURATION
-# =============================================================================
-# SQLite and PostgreSQL need different settings:
-#
-#   SQLite:
-#     - check_same_thread=False   → allows use across FastAPI worker threads
-#     - No connection pooling     → SQLite is file-based, pooling is irrelevant
-#
-#   PostgreSQL (production):
-#     - pool_size=10              → keep 10 persistent connections open
-#     - max_overflow=20           → allow 20 extra connections under heavy load
-#     - pool_pre_ping=True        → test connections before use (handles dropped
-#                                   connections from DB restarts or idle timeouts)
-#     - pool_recycle=1800         → recycle connections every 30 mins to prevent
-#                                   stale connection errors on long-running servers
+# ---------------------------------------------------------------------------
+# Engine
+# ---------------------------------------------------------------------------
 
 if IS_SQLITE:
     engine = create_engine(
@@ -39,56 +27,42 @@ if IS_SQLITE:
         echo=os.getenv("SQL_ECHO", "false").lower() == "true",
     )
 
-    # Enable WAL mode for SQLite — allows concurrent reads during writes,
-    # which is critical for FastAPI's async request handling
     @event.listens_for(engine, "connect")
-    def set_sqlite_pragma(dbapi_conn, connection_record):
-        cursor = dbapi_conn.cursor()
-        cursor.execute("PRAGMA journal_mode=WAL")
-        cursor.execute("PRAGMA synchronous=NORMAL")
-        cursor.execute("PRAGMA foreign_keys=ON")
-        cursor.close()
+    def _sqlite_pragmas(dbapi_conn, _):
+        cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA journal_mode=WAL")    # concurrent reads during writes
+        cur.execute("PRAGMA synchronous=NORMAL")  # safe + faster than FULL
+        cur.execute("PRAGMA foreign_keys=ON")
+        cur.close()
 
 else:
     engine = create_engine(
         DATABASE_URL,
         pool_size=int(os.getenv("DB_POOL_SIZE", 10)),
         max_overflow=int(os.getenv("DB_MAX_OVERFLOW", 20)),
-        pool_pre_ping=True,
-        pool_recycle=1800,
+        pool_pre_ping=True,   # drop stale connections before use
+        pool_recycle=1800,    # recycle every 30 min (prevents idle timeout errors)
         echo=os.getenv("SQL_ECHO", "false").lower() == "true",
     )
 
-# =============================================================================
-# SESSION FACTORY
-# =============================================================================
+# ---------------------------------------------------------------------------
+# Session factory
+# ---------------------------------------------------------------------------
 
-SessionLocal = sessionmaker(
-    autocommit=False,
-    autoflush=False,
-    bind=engine,
-)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-# =============================================================================
-# DECLARATIVE BASE
-# =============================================================================
-# Using the modern SQLAlchemy 2.x style.
-# declarative_base() still works but is deprecated — DeclarativeBase is the
-# recommended approach going forward.
+# ---------------------------------------------------------------------------
+# Declarative base
+# ---------------------------------------------------------------------------
 
 class Base(DeclarativeBase):
     pass
 
-# =============================================================================
-# DATABASE HEALTH CHECK
-# =============================================================================
+# ---------------------------------------------------------------------------
+# Health check
+# ---------------------------------------------------------------------------
 
 def check_db_connection() -> bool:
-    """
-    Test database connectivity.
-    Called during startup to fail fast if DB is unreachable.
-    Returns True if connected, False otherwise.
-    """
     try:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
@@ -98,22 +72,16 @@ def check_db_connection() -> bool:
         logger.error(f"[DB] Connection failed: {e}")
         return False
 
-# =============================================================================
-# DEPENDENCY — FastAPI route dependency
-# =============================================================================
+# ---------------------------------------------------------------------------
+# FastAPI dependency
+# ---------------------------------------------------------------------------
 
 def get_db():
     """
-    Yield a database session for use in FastAPI route dependencies.
+    Yield a session per request. Always rolls back on error and closes on exit.
 
-    Guarantees:
-      - Session is always closed after the request, even on error
-      - Rolls back any uncommitted transaction if an exception is raised
-        (prevents dirty state from leaking between requests)
-
-    Usage in routes:
-      def my_route(db: Session = Depends(get_db)):
-          ...
+    Usage:
+        def route(db: Session = Depends(get_db)): ...
     """
     db = SessionLocal()
     try:
