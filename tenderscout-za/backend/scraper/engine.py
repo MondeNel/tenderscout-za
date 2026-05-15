@@ -340,31 +340,42 @@ async def run_scraper() -> int:
                 if src.get("js_required"):
                     continue
 
-                # Use SSL-exempt client for known broken-cert domains
-                scrape_client = client
+                # FIX: Use a context-managed client for SSL-exempt domains to prevent connection leaks
                 if any(d in src.get("url", "") for d in _SSL_EXEMPT_DOMAINS):
-                    scrape_client = httpx.AsyncClient(
+                    async with httpx.AsyncClient(
                         timeout=45, headers=get_headers(),
                         follow_redirects=True, verify=False,
-                    )
+                    ) as scrape_client:
+                        try:
+                            if src["source_type"] == "aggregator":
+                                from scraper.sites.sa_tenders import scrape_aggregator
+                                tenders = await scrape_aggregator(scrape_client, src)
+                            else:
+                                from scraper.sites.tender_bulletins import scrape_source
+                                tenders = await scrape_source(scrape_client, src)
+                        except Exception as e:
+                            logger.error(f"[ENGINE] Static source {name} failed: {e}")
+                            report.append({"source": name, "scraped": 0, "new": 0, "status": "error"})
+                            update_scraper_status(db, name, 0, e)
+                            continue
+                else:
+                    try:
+                        if src["source_type"] == "aggregator":
+                            from scraper.sites.sa_tenders import scrape_aggregator
+                            tenders = await scrape_aggregator(client, src)
+                        else:
+                            from scraper.sites.tender_bulletins import scrape_source
+                            tenders = await scrape_source(client, src)
+                    except Exception as e:
+                        logger.error(f"[ENGINE] Static source {name} failed: {e}")
+                        report.append({"source": name, "scraped": 0, "new": 0, "status": "error"})
+                        update_scraper_status(db, name, 0, e)
+                        continue
 
-                try:
-                    if src["source_type"] == "aggregator":
-                        from scraper.sites.sa_tenders import scrape_aggregator
-                        tenders = await scrape_aggregator(scrape_client, src)
-                    else:
-                        from scraper.sites.tender_bulletins import scrape_source
-                        tenders = await scrape_source(scrape_client, src)
-
-                    new = upsert_tenders(db, tenders)
-                    total_new += new
-                    report.append({"source": name, "scraped": len(tenders), "new": new, "status": "ok"})
-                    update_scraper_status(db, name, new)
-
-                except Exception as e:
-                    logger.error(f"[ENGINE] Static source {name} failed: {e}")
-                    report.append({"source": name, "scraped": 0, "new": 0, "status": "error"})
-                    update_scraper_status(db, name, 0, e)
+                new = upsert_tenders(db, tenders)
+                total_new += new
+                report.append({"source": name, "scraped": len(tenders), "new": new, "status": "ok"})
+                update_scraper_status(db, name, new)
 
             logger.info(f"[ENGINE] Phase 3 complete")
 
