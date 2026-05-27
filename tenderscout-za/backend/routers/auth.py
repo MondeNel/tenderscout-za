@@ -29,10 +29,20 @@ def register(user_data: schemas.UserRegister, db: Session = Depends(get_db)):
             detail="An account with this email already exists",
         )
 
+    # Clean industry list if provided
+    industries = user_data.industries or []
+    # Remove duplicates and empty strings
+    industries = list(dict.fromkeys([i.strip() for i in industries if i.strip()]))
+
     user = models.User(
         email=email,
         full_name=user_data.full_name.strip(),
         password_hash=auth_utils.hash_password(user_data.password),
+        industry_preferences=industries if industries else None,
+        company_name=user_data.company_name,
+        registration_number=user_data.registration_number,
+        bee_level=user_data.bee_level,
+        company_size=user_data.company_size,
         credit_balance=FREE_CREDITS,
         province_preferences=[user_data.province] if user_data.province else None,
         town_preferences=[user_data.town] if user_data.town else None,
@@ -52,7 +62,7 @@ def register(user_data: schemas.UserRegister, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(user)
 
-    logger.info(f"[AUTH] New user registered: {email}")
+    logger.info(f"[AUTH] New user registered: {email} with industries: {industries}")
     return {
         "access_token": auth_utils.create_access_token({"sub": user.email}),
         "token_type": "bearer",
