@@ -1,20 +1,13 @@
 /**
  * File: src/pages/Register.jsx
- * Purpose: User Registration Page with Company Profile & Industry Selection
+ * Purpose: User Registration Page with Company Profile & Industry Dropdown
  *
  * New users:
  *   - Enter their name, email, password
  *   - Optionally provide company details (name, reg number, BEE, size)
- *   - Select their industries (multi‑select from 20 standard categories)
+ *   - Select one or more industries from a dropdown (multi‑select)
  *   - Choose province and town (for map centering)
  *   - Get 5 free credits on signup
- *
- * After successful registration:
- *   1. Account is created with all preferences saved
- *   2. JWT token is returned and stored
- *   3. User profile is fetched
- *   4. AuthContext is updated
- *   5. User is redirected directly to /dashboard (no separate onboarding)
  */
 
 import { useState, useEffect } from 'react'
@@ -24,7 +17,6 @@ import { register, getProfile } from '../api/auth'
 import { SA_LOCATIONS, getTowns, findTown } from '../data/saLocations'
 import { Zap, Eye, EyeOff, Check, X, MapPin, Building2 } from 'lucide-react'
 import toast from 'react-hot-toast'
-import IndustryCheckboxGroup from '../components/IndustryCheckboxGroup'
 
 const PROVINCES = Object.keys(SA_LOCATIONS)
 
@@ -81,7 +73,6 @@ export default function Register() {
   const handleChange = (field, value) => {
     setForm(prev => {
       const updated = { ...prev, [field]: value }
-      // Reset town when province changes
       if (field === 'province') {
         updated.town = ''
       }
@@ -93,13 +84,13 @@ export default function Register() {
     }
   }
 
-  const handleIndustriesChange = (industries) => {
-    setForm(prev => ({ ...prev, industries }))
+  const handleIndustriesChange = (e) => {
+    const options = Array.from(e.target.selectedOptions, option => option.value)
+    setForm(prev => ({ ...prev, industries: options }))
   }
 
   /**
    * Handle form submission
-   * Sends all company + location data along with user details.
    */
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -113,7 +104,6 @@ export default function Register() {
     setLoading(true)
 
     try {
-      // Build registration payload with all new fields
       const payload = {
         email: form.email,
         full_name: form.full_name,
@@ -125,7 +115,6 @@ export default function Register() {
         company_size: form.company_size || undefined,
       }
 
-      // Location data
       if (form.province) {
         payload.province = form.province
       }
@@ -145,22 +134,14 @@ export default function Register() {
         payload.business_location = form.province
       }
 
-      // Step 1: Create account
       const res = await register(payload)
       const token = res.data.access_token
-
-      // Step 2: Store token
       localStorage.setItem('token', token)
 
-      // Step 3: Fetch user profile
       const profile = await getProfile()
-
-      // Step 4: Update AuthContext
       loginUser(token, profile.data)
 
       toast.success('Account created — 5 free credits added!')
-
-      // Step 5: Go straight to dashboard (industries already set)
       navigate('/dashboard')
     } catch (err) {
       const errorMessage =
@@ -276,7 +257,7 @@ export default function Register() {
             </div>
 
             {/* =================================================================
-                COMPANY DETAILS (NEW)
+                COMPANY DETAILS
                 ================================================================= */}
             <div className="border-t border-gray-100 pt-4">
               <div className="flex items-center gap-2 mb-3">
@@ -348,7 +329,7 @@ export default function Register() {
             </div>
 
             {/* =================================================================
-                INDUSTRY SELECTION (NEW)
+                INDUSTRY SELECTION (DROPDOWN)
                 ================================================================= */}
             <div className="border-t border-gray-100 pt-4">
               <div className="flex items-center gap-2 mb-3">
@@ -357,13 +338,43 @@ export default function Register() {
                 </span>
               </div>
               <p className="text-xs text-gray-500 mb-3">
-                Select at least one industry. Your dashboard will only show
-                relevant tenders.
+                Select one or more industries (hold Ctrl/Cmd to select multiple).
+                Your dashboard will show only relevant tenders.
               </p>
-              <IndustryCheckboxGroup
-                selected={form.industries}
+              <select
+                multiple
+                size={6}
+                className="input py-2 text-sm w-full"
+                value={form.industries}
                 onChange={handleIndustriesChange}
-              />
+              >
+                {/* Note: This list can be fetched from /user/industries endpoint,
+                    but for now we duplicate the 20 standard categories. */}
+                {[
+                  "Security Services",
+                  "Construction",
+                  "Waste Management",
+                  "Electrical Services",
+                  "Plumbing",
+                  "ICT / Technology",
+                  "Maintenance",
+                  "Mining Services",
+                  "Cleaning Services",
+                  "Catering",
+                  "Consulting",
+                  "Transport & Logistics",
+                  "Healthcare",
+                  "Landscaping",
+                  "Materials, Supply & Services",
+                  "HR & Training",
+                  "Accounting, Banking & Legal",
+                  "Media & Marketing",
+                  "Travel, Tourism & Hospitality",
+                  "Engineering Consultants",
+                ].map(ind => (
+                  <option key={ind} value={ind}>{ind}</option>
+                ))}
+              </select>
             </div>
 
             {/* =================================================================
