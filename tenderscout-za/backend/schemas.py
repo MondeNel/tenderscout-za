@@ -4,6 +4,30 @@ from pydantic import BaseModel, EmailStr, ConfigDict, field_validator, model_val
 from typing import Optional, List, Literal
 from datetime import datetime
 
+# List of the 20 standard industries used across the system
+INDUSTRY_CHOICES = [
+    "Security Services",
+    "Construction",
+    "Waste Management",
+    "Electrical Services",
+    "Plumbing",
+    "ICT / Technology",
+    "Maintenance",
+    "Mining Services",
+    "Cleaning Services",
+    "Catering",
+    "Consulting",
+    "Transport & Logistics",
+    "Healthcare",
+    "Landscaping",
+    "Materials, Supply & Services",
+    "HR & Training",
+    "Accounting, Banking & Legal",
+    "Media & Marketing",
+    "Travel, Tourism & Hospitality",
+    "Engineering Consultants",
+]
+
 class _OrmBase(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -15,6 +39,7 @@ class UserRegister(BaseModel):
     email:             EmailStr
     full_name:         str
     password:          str
+    industries:        Optional[List[str]]   = None 
     province:          Optional[str]   = None
     town:              Optional[str]   = None
     business_location: Optional[str]   = None
@@ -26,6 +51,15 @@ class UserRegister(BaseModel):
     def password_strength(cls, v: str) -> str:
         if len(v) < 8:
             raise ValueError("Password must be at least 8 characters")
+        return v
+    
+    @field_validator("industries")
+    @classmethod
+    def validate_industries(cls, v):
+        if v is not None:
+            for ind in v:
+                if ind not in INDUSTRY_CHOICES:
+                    raise ValueError(f"Invalid industry: {ind}")
         return v
 
     @field_validator("full_name")
@@ -89,10 +123,23 @@ class UserPreferences(BaseModel):
     province_preferences:     Optional[List[str]]  = None
     town_preferences:         Optional[List[str]]  = None
     municipality_preferences: Optional[List[str]]  = None
+    company_name:             Optional[str]         = None
+    registration_number:      Optional[str]         = None
+    bee_level:                Optional[str]         = None
+    company_size:             Optional[str]         = None
     business_location:        Optional[str]         = None
     business_lat:             Optional[float]       = None
     business_lng:             Optional[float]       = None
     search_radius_km:         Optional[int]         = None
+
+    @field_validator("industry_preferences")
+    @classmethod
+    def validate_industries(cls, v):
+        if v is not None:
+            for ind in v:
+                if ind not in INDUSTRY_CHOICES:
+                    raise ValueError(f"Invalid industry: {ind}")
+        return v
 
     @field_validator("business_lat")
     @classmethod
