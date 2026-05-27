@@ -1,6 +1,7 @@
 """
 File: routers/user.py
-Purpose: User profile, preferences, and transaction history endpoints
+Purpose: User profile, preferences, transaction history,
+         and available industries list.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -77,3 +78,8 @@ def get_transactions(
         .limit(limit)
         .all()
     )
+
+@router.get("/industries", response_model=List[str])
+def get_industries():
+    """Return the list of valid industries for profile setup."""
+    return schemas.INDUSTRY_CHOICES

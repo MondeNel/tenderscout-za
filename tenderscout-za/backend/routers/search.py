@@ -1,6 +1,7 @@
 """
 File: routers/search.py
-Purpose: Tender search with filtering, pagination, radius search, and credit charging
+Purpose: Tender search with filtering, pagination, radius search, credit charging,
+         and automatic industry filtering based on user preferences.
 """
 
 from decimal import Decimal
@@ -93,6 +94,7 @@ def search_tenders(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(auth_utils.get_current_user),
 ):
+    # Credit check
     balance = Decimal(str(current_user.credit_balance))
     if balance < CREDITS_PER_RESULT:
         raise HTTPException(
@@ -104,6 +106,14 @@ def search_tenders(
                 "topup_url": "/credits/topup",
             },
         )
+
+    # ── Auto‑filter by user’s saved industries ────────────────────────
+    if not search.industries:
+        user_industries = current_user.industry_prefs  # returns list
+        if user_industries:
+            search.industries = user_industries
+            logger.info(f"[SEARCH] Auto‑filtering by user industries: {user_industries}")
+    # ───────────────────────────────────────────────────────────────────
 
     query = db.query(models.Tender).filter(models.Tender.is_active == True)
 
