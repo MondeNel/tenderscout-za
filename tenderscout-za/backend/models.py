@@ -26,6 +26,10 @@ class User(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
     transactions = relationship("Transaction", back_populates="user", lazy="dynamic")
     search_logs  = relationship("SearchLog",   back_populates="user", lazy="dynamic")
+    company_name         = Column(String(255), nullable=True)      # optional display name
+    registration_number  = Column(String(100), nullable=True)      # company reg number
+    bee_level            = Column(String(20), nullable=True)       # e.g. "1", "2", "Non-compliant"
+    company_size         = Column(String(20), nullable=True)       # "Micro", "Small", "Medium", "Large"
 
     @property
     def industry_prefs(self):
