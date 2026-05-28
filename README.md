@@ -1,6 +1,10 @@
 # TenderScout ZA – South African Tender Aggregation Platform
 
-TenderScout ZA is a real‑time tender aggregation system that crawls, scrapes, and indexes tender opportunities from South African municipal and provincial portals, as well as national aggregator sites. It provides a clean, filterable web interface where users can search for tenders by industry, province, municipality, or keyword – with a credit‑based usage model.
+A friend of mine was spending hours each week manually checking government websites to track procurement opportunities — opening the same 10+ portals every morning just to stay on top of what was available. I built TenderScout ZA to fix that.
+
+TenderScout is a real-time tender aggregation system that crawls, scrapes, and indexes tender opportunities from South African municipal and provincial portals, as well as national aggregator sites. It provides a clean, filterable web interface where users can search for tenders by industry, province, municipality, or keyword — with a credit-based usage model.
+
+I also used this project deliberately to learn how to build web crawlers and scrapers from scratch. The crawler now covers **60+ sources** across all 9 provinces and indexes **3,500+ active tenders**. Building it taught me BFS crawl strategies, `robots.txt` compliance, deduplication via content hashing, geographic entity detection, and handling sites that require JavaScript rendering via Playwright — skills I would not have picked up building standard CRUD applications.
 
 ---
 
@@ -80,7 +84,21 @@ TenderScout ZA is a real‑time tender aggregation system that crawls, scrapes, 
 
 ---
 
-## Architecture Overview
+## 🏗️ Architecture Overview
+
+The project is split into two top-level folders — `backend/` (FastAPI) and `frontend/` (React + Vite).
+
+| Layer | Folder / File | Responsibility |
+|---|---|---|
+| **API** | `backend/main.py`, `backend/routers/` | FastAPI entry point and all route handlers |
+| **Scraping engine** | `backend/scraper/` | Orchestrator, BFS crawler, scheduler, site-specific scrapers |
+| **Data models** | `backend/models.py`, `schemas.py`, `database.py` | SQLAlchemy ORM, Pydantic schemas, DB connection |
+| **Utilities & scripts** | `backend/auth_utils.py`, `scripts/` | Auth, alerts, DB init, scraper tests, debugging tools |
+| **Frontend** | `frontend/src/` | React pages, components, API clients, context, static data |
+
+### Backend
+
+```
 backend/
 ├── main.py                 # FastAPI application entry point
 ├── models.py               # SQLAlchemy database models
@@ -91,32 +109,82 @@ backend/
 ├── requirements.txt        # Python dependencies
 │
 ├── scraper/
-│   ├── engine.py           # Main orchestrator (4-phase pipeline)
-│   ├── crawler.py          # BFS crawler for URL discovery
-│   ├── scheduler.py        # APScheduler for automated runs
-│   ├── utils.py            # Shared utilities (detection, parsing)
+│   ├── engine.py           # Orchestrates the 4-phase pipeline
+│   ├── crawler.py          # BFS crawler — discovers URLs, respects robots.txt
+│   ├── scheduler.py        # APScheduler — runs the full pipeline daily
+│   ├── utils.py            # Shared helpers: geo detection, date parsing, deduplication
 │   │
 │   └── sites/
-│       ├── registry.py     # Single source of truth for all sources
-│       ├── city_portals.py # Municipal scrapers (60+ handlers)
-│       ├── sa_tenders.py   # Aggregator scrapers
-│       ├── tender_bulletins.py # Bulletin scrapers
-│       ├── js_scraper.py   # Playwright JS scrapers
-│       └── etenders.py     # eTenders.gov.za scraper
+│       ├── registry.py         # Single source of truth for all 60+ sources
+│       ├── city_portals.py     # Municipal portal scrapers
+│       ├── sa_tenders.py       # National aggregator scrapers
+│       ├── tender_bulletins.py # Bulletin-style scrapers
+│       ├── js_scraper.py       # Playwright scrapers for JS-rendered pages
+│       └── etenders.py         # eTenders.gov.za scraper
 │
 ├── routers/
-│   ├── auth.py             # Authentication endpoints
-│   ├── tenders.py          # Tender endpoints
-│   ├── search.py           # Search endpoints
-│   ├── credits.py          # Credit management
-│   ├── user.py             # User profile
-│   └── proxy.py            # PDF proxy
+│   ├── auth.py             # Register, login, JWT token management
+│   ├── tenders.py          # Tender listing and detail endpoints
+│   ├── search.py           # Filtered search with credit deduction
+│   ├── credits.py          # Credit balance and purchase
+│   ├── user.py             # User profile and preferences
+│   └── proxy.py            # PDF document proxy
 │
 └── scripts/
-    ├── create_db.py        # Database initialization
-    ├── show_provinces.py   # Province distribution stats
-    ├── test_all_scrapers.py # Full scraper test suite
-    ├── debug_selectors.py  # CSS selector debugging
-    └── test_db_schema.py   # Schema verification
+    ├── create_db.py            # Database initialisation
+    ├── show_provinces.py       # Province distribution stats
+    ├── test_all_scrapers.py    # Full scraper test suite
+    ├── debug_selectors.py      # CSS selector debugging
+    └── test_db_schema.py       # Schema verification
+```
 
-    
+### Frontend
+
+```
+frontend/
+├── public/
+└── src/
+    ├── api/
+    │   ├── auth.js             # Auth API calls
+    │   ├── client.js           # Axios base client
+    │   ├── credits.js          # Credits API calls
+    │   ├── industries.js       # Industry lookup
+    │   └── tenders.js          # Tender API calls
+    │
+    ├── components/
+    │   ├── ErrorBoundary.jsx
+    │   ├── IndustryCheckboxGroup.jsx
+    │   ├── Layout.jsx
+    │   ├── LoadingSpinner.jsx
+    │   ├── LocationPicker.jsx
+    │   ├── TenderCard.jsx
+    │   ├── TenderDrawer.jsx
+    │   └── TenderMap.jsx
+    │
+    ├── context/
+    │   └── AuthContext.jsx     # Global auth state
+    │
+    ├── data/
+    │   └── saLocations.js      # Static SA province/municipality data
+    │
+    ├── pages/
+    │   ├── Account.jsx
+    │   ├── Dashboard.jsx
+    │   ├── Login.jsx
+    │   ├── Onboarding.jsx
+    │   ├── Profile.jsx
+    │   ├── Register.jsx
+    │   ├── Search.jsx
+    │   └── TopUp.jsx
+    │
+    ├── App.css
+    ├── App.jsx
+    ├── index.css
+    └── main.jsx
+│
+├── index.html
+├── package.json
+├── postcss.config.js
+├── tailwind.config.js
+└── vite.config.js
+```
