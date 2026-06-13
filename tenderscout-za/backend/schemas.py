@@ -36,15 +36,19 @@ class Token(BaseModel):
     token_type: str = "bearer"
 
 class UserRegister(BaseModel):
-    email:             EmailStr
-    full_name:         str
-    password:          str
-    industries:        Optional[List[str]]   = None 
-    province:          Optional[str]   = None
-    town:              Optional[str]   = None
-    business_location: Optional[str]   = None
-    business_lat:      Optional[float] = None
-    business_lng:      Optional[float] = None
+    email:              EmailStr
+    full_name:          str
+    password:           str
+    industries:         Optional[List[str]]   = None
+    company_name:       Optional[str]         = None   # NEW
+    registration_number: Optional[str]        = None   # NEW
+    bee_level:          Optional[str]         = None   # NEW
+    company_size:       Optional[str]         = None   # NEW
+    province:           Optional[str]         = None
+    town:               Optional[str]         = None
+    business_location:  Optional[str]         = None
+    business_lat:       Optional[float]       = None
+    business_lng:       Optional[float]       = None
 
     @field_validator("password")
     @classmethod
@@ -92,6 +96,10 @@ class UserOut(_OrmBase):
     id:                      int
     email:                   str
     full_name:               str
+    company_name:            Optional[str]       = None   # NEW
+    registration_number:     Optional[str]       = None   # NEW
+    bee_level:               Optional[str]       = None   # NEW
+    company_size:            Optional[str]       = None   # NEW
     credit_balance:          float
     industry_preferences:    List[str] = []
     province_preferences:    List[str] = []
