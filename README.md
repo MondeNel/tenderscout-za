@@ -1,190 +1,211 @@
-# TenderScout ZA – South African Tender Aggregation Platform
+# TenderScout ZA — South African Government Tender Aggregation Platform
 
-A friend of mine was spending hours each week manually checking government websites to track procurement opportunities — opening the same 10+ portals every morning just to stay on top of what was available. I built TenderScout ZA to fix that.
+## Why I built this
 
-TenderScout is a real-time tender aggregation system that crawls, scrapes, and indexes tender opportunities from South African municipal and provincial portals, as well as national aggregator sites. It provides a clean, filterable web interface where users can search for tenders by industry, province, municipality, or keyword — with a credit-based usage model.
+A friend of mine was spending hours each week manually checking government websites to track procurement opportunities — opening the same 10+ portals every morning just to stay on top of what was available.
 
-I also used this project deliberately to learn how to build web crawlers and scrapers from scratch. The crawler now covers **60+ sources** across all 9 provinces and indexes **3,500+ active tenders**. Building it taught me BFS crawl strategies, `robots.txt` compliance, deduplication via content hashing, geographic entity detection, and handling sites that require JavaScript rendering via Playwright — skills I would not have picked up building standard CRUD applications.
+I thought: *why does finding a public tender in South Africa require opening 20 browser tabs every single day?*
 
----
+I started exploring the problem as a **FastAPI + SQLite backend**, because that stack is perfect for a lightweight scraping pipeline before committing to heavier infrastructure. While building it, I realised the scope was bigger than one city or province — there are **60+ active sources** across all 9 provinces, and none of them talk to each other.
 
-## Table of Contents
-
-- [Features](#features)
-- [Tech Stack](#tech-stack)
-- [Architecture Overview](#architecture-overview)
-- [How It Works](#how-it-works)
-- [Current Coverage](#current-coverage)
-- [Setup & Installation](#setup--installation)
-  - [Backend Setup](#backend-setup)
-  - [Frontend Setup](#frontend-setup)
-- [Environment Variables](#environment-variables)
-- [API Endpoints](#api-endpoints)
-- [Project Structure](#project-structure)
-- [Future Improvements](#future-improvements)
-- [License](#license)
+**This repository is the full-stack platform I built to solve that.** A BFS crawler scrapes, deduplicates, and indexes tenders from municipal portals, provincial governments, and national aggregators — and surfaces everything in one searchable, filterable dashboard. The actual scraping engine, scheduling pipeline, and credit-based usage model are all live. This is not a prototype.
 
 ---
 
-## Features
+## Overview
 
-- **Nationwide Tender Coverage**  
-  Aggregates tenders, bids, RFQs, and quotations from **60+ sources** across all 9 South African provinces. Currently indexes **3,500+ active tenders**.
+TenderScout ZA is a real-time tender aggregation platform built for South Africa. It provides a single interface where procurement professionals, contractors, and SMEs can search 3,500+ active government tenders — filtered by province, municipality, industry, or keyword — without touching a single government portal directly.
 
-- **Multi-Source Aggregation**  
-  Scrapes municipal websites, district municipalities, provincial governments, and national aggregators including:
-  - `eTenders.gov.za` (Official government portal)
-  - `EasyTenders.co.za` (All 9 provinces)
-  - `OnlineTenders.co.za`
-  - `Municipalities.co.za`
+**What makes it real:** The scraping pipeline, geographic detection, deduplication, JWT auth, and credit system are fully implemented. SQLite is used for rapid development before an eventual PostgreSQL migration.
 
-- **Intelligent Geographic Detection**  
-  Uses province-to-municipality-to-town mapping and keyword analysis to correctly assign each tender to its province and local municipality – even when the source is a national aggregator.
-
-- **Industry Classification**  
-  Automatically categorizes tenders into **20 industry categories** (IT & Telecoms, Building & Trades, Civil, Security, etc.) using keyword detection.
-
-- **Expired Tender Filtering**  
-  Parses closing dates in various South African formats and automatically excludes expired tenders from active search results.
-
-- **Incremental Scraping with Deduplication**  
-  Uses `content_hash` (MD5 of title + URL) to prevent duplicate tenders. Only new tenders are inserted.
-
-- **Credit‑Based Search**  
-  Each search result consumes 1 credit. New users receive 5 free credits; additional credits can be purchased (demo mode).
-
-- **User Preferences & Alerts**  
-  Users can save preferred industries, provinces, municipalities, and towns. The dashboard shows relevant tenders based on these preferences.
-
-- **Automated Scheduling**  
-  APScheduler runs the full scraping pipeline daily (configurable interval/cron) to keep tenders fresh.
-
-- **Document Proxy**  
-  Secure proxy endpoint allows PDF documents to be viewed inline without exposing the original URL or causing CORS issues.
-
-- **Responsive Frontend**  
-  Built with React, Tailwind CSS, and Lucide icons – works on desktop and mobile.
+Built with **FastAPI**, **React 18**, **Tailwind CSS**, **Playwright**, and **Leaflet**, the platform features automated daily scraping, PDF document proxying, interactive map views, and location-aware onboarding.
 
 ---
 
 ## Tech Stack
 
-| Layer          | Technology                                                      |
-|----------------|-----------------------------------------------------------------|
-| Backend API    | FastAPI (Python 3.12)                                           |
-| Scraping       | `httpx`, `BeautifulSoup4`, `lxml`, `Playwright` (for JS sites)  |
-| Crawler        | Custom BFS crawler with `robots.txt` respect                    |
-| Database       | SQLite (default) / PostgreSQL (optional)                        |
-| ORM            | SQLAlchemy                                                      |
-| Auth           | JWT (via `python-jose`), bcrypt hashing                         |
-| Scheduler      | APScheduler (runs scraper daily / configurable interval)        |
-| Frontend       | React 18, React Router, Axios                                   |
-| Styling        | Tailwind CSS                                                    |
-| PDF Viewer     | `react-pdf`                                                     |
+| Technology | Purpose |
+|------------|---------|
+| FastAPI (Python 3.12) | Backend API |
+| SQLAlchemy + SQLite | ORM and database |
+| httpx + BeautifulSoup4 | Lightweight HTTP scraping |
+| Playwright | JS-rendered site scraping |
+| APScheduler | Daily scraping pipeline |
+| JWT (python-jose) | Authentication |
+| React 18 + Vite | Frontend framework |
+| Tailwind CSS | Styling |
+| Leaflet | Interactive tender map |
+| react-pdf | Inline PDF document viewer |
 
 ---
 
-## 🏗️ Architecture Overview
+## Features
 
-The project is split into two top-level folders — `backend/` (FastAPI) and `frontend/` (React + Vite).
+### 🔐 Authentication
 
-| Layer | Folder / File | Responsibility |
-|---|---|---|
-| **API** | `backend/main.py`, `backend/routers/` | FastAPI entry point and all route handlers |
-| **Scraping engine** | `backend/scraper/` | Orchestrator, BFS crawler, scheduler, site-specific scrapers |
-| **Data models** | `backend/models.py`, `schemas.py`, `database.py` | SQLAlchemy ORM, Pydantic schemas, DB connection |
-| **Utilities & scripts** | `backend/auth_utils.py`, `scripts/` | Auth, alerts, DB init, scraper tests, debugging tools |
-| **Frontend** | `frontend/src/` | React pages, components, API clients, context, static data |
+- **Register**: Email, password, and region-based onboarding
+- **Login**: JWT token issued on success, persisted in context
+- **Onboarding**: Province, municipality, and industry preference selection on first login
+- Location-aware dashboard on signup — tenders filtered to your region by default
+- Protected routes with redirect for unauthenticated users
 
-### Backend
+### 🔍 Search & Discovery
+
+- Full-text search across 3,500+ indexed tenders
+- Filter by **province**, **municipality**, **town**, **industry category**, or **keyword**
+- 20 auto-classified industry categories (IT & Telecoms, Civil, Security, Building & Trades, etc.)
+- Expired tender filtering — closing dates parsed in multiple SA date formats
+- **Credit-based search**: each result set consumes 1 credit
+- New users receive 5 free credits on registration
+
+### 🗺️ Interactive Map
+
+- Leaflet map with district-level tender density visualisation
+- Tenders plotted by geographic entity detection (province → municipality → town)
+- OSRM route overlays for field-based users
+
+#### Dashboard
+- Tender feed personalised to saved province, municipality, and industry preferences
+- Stats overview: total indexed tenders, active sources, credits remaining
+- Quick filters for saved preferences
+- "Top Up Credits" flow for continued access
+
+#### Tender Detail
+- Full tender metadata: title, source, closing date, industry, location
+- **Inline PDF viewer** — documents proxied securely to avoid CORS issues
+- Direct link to source portal
+- Closing date countdown
+
+#### Account & Profile
+- Saved industry and location preferences
+- Credit balance and purchase history
+- Profile management
+
+---
+
+## 🕷️ Scraping Engine
+
+#### Coverage
+- **60+ sources** across all 9 provinces
+- Municipal portals, district municipalities, provincial governments
+- National aggregators: `eTenders.gov.za`, `EasyTenders.co.za`, `OnlineTenders.co.za`, `Municipalities.co.za`
+
+#### How it works
+- **BFS crawler** discovers tender URLs from seed sources, respects `robots.txt`
+- **Deduplication** via `content_hash` (MD5 of title + URL) — only new tenders inserted
+- **Playwright** handles JS-rendered portals that httpx can't reach
+- **Geographic entity detection** maps each tender to province → municipality → town using keyword analysis, even when scraped from a national aggregator
+- **APScheduler** runs the full pipeline daily at a configurable interval
+
+---
+
+## 📱 Responsive Design
+
+- **Mobile-first** approach throughout
+- Dashboard and search views adapt to all screen sizes
+- Tender cards collapse gracefully on narrow viewports
+- PDF viewer works on desktop and mobile
+
+---
+
+## 📦 Project Structure
 
 ```
-backend/
-├── main.py                 # FastAPI application entry point
-├── models.py               # SQLAlchemy database models
-├── schemas.py              # Pydantic schemas for API
-├── database.py             # Database connection
-├── auth_utils.py           # JWT authentication utilities
-├── notifications.py        # Email/alert utilities
-├── requirements.txt        # Python dependencies
-│
-├── scraper/
-│   ├── engine.py           # Orchestrates the 4-phase pipeline
-│   ├── crawler.py          # BFS crawler — discovers URLs, respects robots.txt
-│   ├── scheduler.py        # APScheduler — runs the full pipeline daily
-│   ├── utils.py            # Shared helpers: geo detection, date parsing, deduplication
+├── backend/
+│   ├── main.py                  # FastAPI entry point
+│   ├── models.py                # SQLAlchemy models
+│   ├── schemas.py               # Pydantic schemas
+│   ├── database.py              # DB connection
+│   ├── auth_utils.py            # JWT utilities
+│   ├── notifications.py         # Alert utilities
 │   │
-│   └── sites/
-│       ├── registry.py         # Single source of truth for all 60+ sources
-│       ├── city_portals.py     # Municipal portal scrapers
-│       ├── sa_tenders.py       # National aggregator scrapers
-│       ├── tender_bulletins.py # Bulletin-style scrapers
-│       ├── js_scraper.py       # Playwright scrapers for JS-rendered pages
-│       └── etenders.py         # eTenders.gov.za scraper
+│   ├── scraper/
+│   │   ├── engine.py            # 4-phase pipeline orchestrator
+│   │   ├── crawler.py           # BFS crawler, robots.txt compliance
+│   │   ├── scheduler.py         # APScheduler daily runs
+│   │   ├── utils.py             # Geo detection, date parsing, deduplication
+│   │   └── sites/
+│   │       ├── registry.py      # All 60+ source definitions
+│   │       ├── city_portals.py  # Municipal scrapers
+│   │       ├── sa_tenders.py    # National aggregator scrapers
+│   │       ├── js_scraper.py    # Playwright scrapers
+│   │       └── etenders.py      # eTenders.gov.za scraper
+│   │
+│   ├── routers/
+│   │   ├── auth.py              # Register, login, JWT
+│   │   ├── tenders.py           # Tender listing and detail
+│   │   ├── search.py            # Filtered search + credit deduction
+│   │   ├── credits.py           # Credit balance and purchase
+│   │   ├── user.py              # Profile and preferences
+│   │   └── proxy.py             # PDF document proxy
+│   │
+│   └── scripts/
+│       ├── create_db.py         # DB initialisation
+│       ├── show_provinces.py    # Province distribution stats
+│       ├── test_all_scrapers.py # Full scraper test suite
+│       └── debug_selectors.py  # CSS selector debugging
 │
-├── routers/
-│   ├── auth.py             # Register, login, JWT token management
-│   ├── tenders.py          # Tender listing and detail endpoints
-│   ├── search.py           # Filtered search with credit deduction
-│   ├── credits.py          # Credit balance and purchase
-│   ├── user.py             # User profile and preferences
-│   └── proxy.py            # PDF document proxy
-│
-└── scripts/
-    ├── create_db.py            # Database initialisation
-    ├── show_provinces.py       # Province distribution stats
-    ├── test_all_scrapers.py    # Full scraper test suite
-    ├── debug_selectors.py      # CSS selector debugging
-    └── test_db_schema.py       # Schema verification
+└── frontend/
+    └── src/
+        ├── api/                 # Axios API clients
+        ├── components/          # Shared UI components
+        ├── context/             # Auth context
+        ├── data/                # Static SA location data
+        └── pages/               # Route-level page components
+            ├── Dashboard.jsx
+            ├── Search.jsx
+            ├── Account.jsx
+            ├── Profile.jsx
+            ├── Onboarding.jsx
+            ├── Login.jsx
+            ├── Register.jsx
+            └── TopUp.jsx
 ```
 
-### Frontend
+---
 
+## 🚀 Getting Started
+
+```bash
+# Backend
+cd backend
+python -m venv venv
+source venv/bin/activate       # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+python scripts/create_db.py
+uvicorn main:app --reload
+
+# Frontend
+cd frontend
+npm install
+npm run dev
 ```
-frontend/
-├── public/
-└── src/
-    ├── api/
-    │   ├── auth.js             # Auth API calls
-    │   ├── client.js           # Axios base client
-    │   ├── credits.js          # Credits API calls
-    │   ├── industries.js       # Industry lookup
-    │   └── tenders.js          # Tender API calls
-    │
-    ├── components/
-    │   ├── ErrorBoundary.jsx
-    │   ├── IndustryCheckboxGroup.jsx
-    │   ├── Layout.jsx
-    │   ├── LoadingSpinner.jsx
-    │   ├── LocationPicker.jsx
-    │   ├── TenderCard.jsx
-    │   ├── TenderDrawer.jsx
-    │   └── TenderMap.jsx
-    │
-    ├── context/
-    │   └── AuthContext.jsx     # Global auth state
-    │
-    ├── data/
-    │   └── saLocations.js      # Static SA province/municipality data
-    │
-    ├── pages/
-    │   ├── Account.jsx
-    │   ├── Dashboard.jsx
-    │   ├── Login.jsx
-    │   ├── Onboarding.jsx
-    │   ├── Profile.jsx
-    │   ├── Register.jsx
-    │   ├── Search.jsx
-    │   └── TopUp.jsx
-    │
-    ├── App.css
-    ├── App.jsx
-    ├── index.css
-    └── main.jsx
-│
-├── index.html
-├── package.json
-├── postcss.config.js
-├── tailwind.config.js
-└── vite.config.js
-```
+
+## ⚠️ Disclaimer
+
+TenderScout ZA is an independent portfolio and educational project created to explore automated procurement discovery, web scraping pipelines, and civic data aggregation.
+
+This project is not affiliated with, endorsed by, or associated with the South African Government, National Treasury, eTenders, any municipal or provincial authority, or any tender aggregator listed as a data source.
+
+All scraping is performed on publicly accessible data. No authentication is bypassed. The platform does not guarantee the accuracy, completeness, or timeliness of indexed tenders. Users should verify all opportunities directly with the originating authority before acting on them.
+
+---
+
+# 🎥 Application Demonstration
+
+## 🔍 Platform Walkthrough
+
+Experience the complete TenderScout ZA journey:
+
+* Registration & location-aware onboarding
+* Tender search with province, municipality and industry filters
+* Interactive map with district-level tender density
+* Inline PDF document viewer
+* Credit-based search model
+* Account preferences and profile management
+
+### ▶️ Platform Demo
+
+
+https://github.com/user-attachments/assets/24b2b1f6-ab31-442d-ac52-2c68b1e4487d
+
