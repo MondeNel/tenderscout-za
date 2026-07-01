@@ -34,7 +34,9 @@ import toast from 'react-hot-toast'
 // =============================================================================
 
 /**
- * Available industry categories (matching backend classification)
+ * Available industry categories (matching backend classification).
+ * These are hard-coded here for the chip selection UI; the backend also
+ * provides a /user/industries endpoint that returns the same list.
  */
 const INDUSTRIES = [
   "Accounting, Banking & Legal", "Building & Trades", "Civil",
@@ -46,7 +48,7 @@ const INDUSTRIES = [
 ]
 
 /**
- * All 9 South African provinces
+ * All 9 South African provinces.
  */
 const PROVINCES = [
   'Gauteng', 'Western Cape', 'KwaZulu-Natal', 'Eastern Cape',
@@ -58,7 +60,7 @@ const PROVINCES = [
 // =============================================================================
 
 /**
- * Consistent section header styling
+ * Consistent section header styling.
  * @param {string} title - Section title
  */
 function SectionHeader({ title }) {
@@ -70,11 +72,11 @@ function SectionHeader({ title }) {
 // =============================================================================
 
 /**
- * Reusable toggle button for multi-select preferences
- * Used for industries and provinces selection
+ * Reusable toggle button for multi-select preferences.
+ * Used for industries and provinces selection.
  * 
  * @param {string} label - Display text
- * @param {boolean} selected - Whether the chip is selected
+ * @param {boolean} selected - Whether the chip is selected (blue highlight)
  * @param {Function} onClick - Click handler
  */
 function ToggleChip({ label, selected, onClick }) {
@@ -101,6 +103,8 @@ export default function Account() {
   // HOOKS & CONTEXT
   // ===========================================================================
   
+  // Extract the current user and the refreshUser function from the global
+  // auth context. `user` contains all profile data including preferences.
   const { user, refreshUser } = useAuth()
 
   // ===========================================================================
@@ -113,9 +117,11 @@ export default function Account() {
   // Province preferences (initialized from user profile)
   const [provinces, setProvinces] = useState(user?.province_preferences || [])
 
-  // Location preferences — initialized from user's saved business location
+  // Location preferences — initialized from user's saved business location.
+  // The location object stores the selected town (with coordinates) and the
+  // search radius in km. We use findTown() to convert a saved location string
+  // into a full location object (lat, lng, municipality) from our static data.
   const [locationValue, setLocationValue] = useState(() => {
-    // Convert saved location string to full location object
     const loc = user?.business_location 
       ? findTown(user.business_location)  // Look up coordinates from saLocations
       : null
@@ -130,12 +136,15 @@ export default function Account() {
   // STATE - Transaction History
   // ===========================================================================
   
+  // Transaction list loaded from the backend (credit/debit history).
   const [transactions, setTransactions] = useState([])
   
   // ===========================================================================
   // STATE - UI
   // ===========================================================================
   
+  // Flag to show a loading spinner on the save button while the API call is in
+  // progress.
   const [saving, setSaving] = useState(false)
 
   // ===========================================================================
@@ -143,7 +152,9 @@ export default function Account() {
   // ===========================================================================
   
   /**
-   * Load transaction history on component mount
+   * Load transaction history on component mount.
+   * If the API call fails (e.g., network error), we silently fail — transaction
+   * history is not critical for core functionality.
    */
   useEffect(() => {
     getTransactions()
@@ -158,8 +169,8 @@ export default function Account() {
   // ===========================================================================
   
   /**
-   * Toggle an item in a list (add if not present, remove if present)
-   * Used for both industries and provinces selection
+   * Toggle an item in a list (add if not present, remove if present).
+   * Used for both industries and provinces selection.
    * 
    * @param {Array} list - Current list
    * @param {Function} setList - State setter function
@@ -173,7 +184,7 @@ export default function Account() {
   // ===========================================================================
   
   /**
-   * Save all preferences to the backend
+   * Save all preferences to the backend.
    * 
    * Collects current state from all preference sections and sends to API.
    * On success:
@@ -195,6 +206,9 @@ export default function Account() {
     try {
       const loc = locationValue.location
       
+      // Build the payload for the PUT /user/preferences endpoint.
+      // Only the fields we explicitly set are updated; omitted fields
+      // are left unchanged on the server.
       await updatePreferences({
         industry_preferences:      industries,
         province_preferences:      provinces,
@@ -206,7 +220,9 @@ export default function Account() {
         municipality_preferences:   loc ? [loc.municipality] : [],
       })
       
-      // Refresh user context to get updated preferences
+      // Refresh the user object in AuthContext so the UI reflects the new
+      // preferences (e.g., the profile card, and any components reading
+      // user.industry_preferences).
       await refreshUser()
       
       toast.success('Preferences saved')
@@ -230,6 +246,7 @@ export default function Account() {
 
       {/* =====================================================================
           PROFILE CARD (Read-only)
+          Displays the user's name, email, and member-since date.
           ===================================================================== */}
       <div className="card p-5 space-y-1">
         <p className="text-base font-semibold text-gray-900">{user?.full_name}</p>
@@ -245,6 +262,7 @@ export default function Account() {
 
       {/* =====================================================================
           INDUSTRY PREFERENCES
+          Multi-select chips that toggle the industries array.
           ===================================================================== */}
       <div className="card p-5">
         <SectionHeader title="Industry preferences" />
@@ -265,6 +283,7 @@ export default function Account() {
 
       {/* =====================================================================
           PROVINCE PREFERENCES
+          Similar to industry chips, but for South African provinces.
           ===================================================================== */}
       <div className="card p-5">
         <SectionHeader title="Province preferences" />
@@ -285,6 +304,8 @@ export default function Account() {
 
       {/* =====================================================================
           LOCATION & RADIUS
+          Uses the LocationPicker component that lets the user select a town
+          from a dropdown (or use geolocation) and choose a radius.
           ===================================================================== */}
       <div className="card p-5">
         <SectionHeader title="Location & radius" />
@@ -301,6 +322,8 @@ export default function Account() {
 
       {/* =====================================================================
           SAVE BUTTON
+          Sends all preference changes to the server. Shows a spinner while
+          the request is in flight.
           ===================================================================== */}
       <div className="flex justify-end">
         <button 
@@ -321,6 +344,8 @@ export default function Account() {
 
       {/* =====================================================================
           TRANSACTION HISTORY
+          Each transaction shows a description, date, and amount.
+          Amount is colored green for credits, red for debits.
           ===================================================================== */}
       <div className="card p-5">
         <SectionHeader title="Transaction history" />
@@ -335,7 +360,7 @@ export default function Account() {
                 key={tx.id} 
                 className="flex items-center justify-between py-2.5 border-b border-gray-100 last:border-0"
               >
-                {/* Transaction details */}
+                {/* Left side: description and date */}
                 <div>
                   <p className="text-sm font-medium text-gray-800">
                     {tx.description}
@@ -345,7 +370,7 @@ export default function Account() {
                   </p>
                 </div>
                 
-                {/* Transaction amount (green for credit, red for debit) */}
+                {/* Right side: amount with color coding */}
                 <span className={`text-sm font-semibold ${
                   tx.transaction_type === 'credit' 
                     ? 'text-brand-600'   // Credit (added)
