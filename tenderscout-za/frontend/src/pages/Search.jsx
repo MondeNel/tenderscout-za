@@ -1,12 +1,29 @@
 /**
  * File: src/pages/Search.jsx
  * Purpose: Advanced Tender Search Page with Interactive Map
+ *
+ * This page combines a filter panel, a results list, and an interactive map
+ * into a single view. Users can:
+ * - Search by keyword, industry, province, municipality, and radius.
+ * - See results on the map as district-level clusters or as individual
+ *   location groups when results are loaded.
+ * - Click district markers to view tenders and optionally search within
+ *   that district.
+ * - See driving routes from their business location to tender destinations
+ *   (using the free OSRM service).
+ * - View full tender details in a side panel.
+ *
+ * Layout is responsive: three‑panel desktop (filters | results | map) and
+ * a tab‑based mobile layout.
  */
 
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { searchTenders, getLatest } from '../api/tenders'
-import { getMunicipalities, SA_LOCATIONS, groupTendersByLocation, createGroupedMarkerIcon, getTenderCoordinates, getRoute } from '../data/saLocations'
+import {
+  getMunicipalities, SA_LOCATIONS, groupTendersByLocation,
+  createGroupedMarkerIcon, getTenderCoordinates, getRoute
+} from '../data/saLocations'
 import TenderCard from '../components/TenderCard'
 import {
   Search as SearchIcon, Filter, Navigation,
@@ -21,6 +38,8 @@ import 'leaflet/dist/leaflet.css'
 // =============================================================================
 // LEAFLET ICON CONFIGURATION
 // =============================================================================
+// We provide our own CDN URLs for the default marker icons, since Leaflet's
+// built‑in URL resolution breaks in bundled apps.
 delete L.Icon.Default.prototype._getIconUrl
 L.Icon.Default.mergeOptions({
   iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png',
@@ -31,12 +50,13 @@ L.Icon.Default.mergeOptions({
 // =============================================================================
 // MAP CONSTANTS
 // =============================================================================
-const SA_BOUNDS = [[-35.5, 16.2], [-22.0, 33.0]]
-const SA_CENTER = [-29.0, 25.0]
-const SA_ZOOM = 6
-const PROV_ZOOM = 9
-const TOWN_ZOOM = 12
+const SA_BOUNDS = [[-35.5, 16.2], [-22.0, 33.0]]   // bounding box for South Africa
+const SA_CENTER = [-29.0, 25.0]                     // centre of the country
+const SA_ZOOM = 6                                    // default zoom
+const PROV_ZOOM = 9                                  // zoom when a province is selected
+const TOWN_ZOOM = 12                                 // zoom when a town is selected
 
+// Tile layer from OpenStreetMap HOT (humanitarian style, looks good for SA)
 const MAP_TILE_URL = "https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png"
 const MAP_ATTRIBUTION = '© <a href="https://www.openstreetmap.org">OpenStreetMap</a> contributors'
 
@@ -57,6 +77,7 @@ const PROVINCES = [
   "Limpopo","Mpumalanga","North West","Northern Cape","Western Cape",
 ]
 
+// Rough centre of each province – used for flyTo when a province chip is clicked
 const PROVINCE_CENTERS = {
   "Gauteng":[-26.27,28.11],"Western Cape":[-33.23,21.86],
   "KwaZulu-Natal":[-28.53,30.90],"Eastern Cape":[-32.30,26.42],
@@ -68,6 +89,11 @@ const PROVINCE_CENTERS = {
 // =============================================================================
 // HELPERS
 // =============================================================================
+
+/**
+ * Check if a lat/lng pair represents a valid geographic coordinate.
+ * Rejects (0,0), NaN, out‑of‑range, and undefined.
+ */
 function isValidCoord(lat, lng) {
   if (lat === undefined || lng === undefined) return false
   const a = Number(lat), b = Number(lng)
@@ -78,12 +104,17 @@ function isValidCoord(lat, lng) {
   return true
 }
 
+/** Return a safe [lat, lng] tuple, falling back to SA_CENTER if invalid. */
 function safeCenter(center) {
   if (!center || !Array.isArray(center) || center.length !== 2) return SA_CENTER
   const [lat, lng] = center.map(Number)
   return isValidCoord(lat, lng) ? [lat, lng] : SA_CENTER
 }
 
+/**
+ * Create a custom Leaflet divIcon for a district cluster marker.
+ * The size and colour scale with the tender count.
+ */
 function makeDistrictIcon(count, sel = false) {
   const s = count > 100 ? 52 : count > 50 ? 46 : count > 20 ? 40 : count > 5 ? 34 : 28
   const bg = sel ? '#991B1B' : count > 100 ? '#DC2626' : count > 50 ? '#EF4444'
@@ -103,6 +134,10 @@ function makeDistrictIcon(count, sel = false) {
   })
 }
 
+/**
+ * React‑Leaflet "FlyTo" helper – smoothly animates the map to a new centre
+ * when `target` changes. We use a `key` to avoid repeated flyTo calls.
+ */
 function FlyCtrl({ target }) {
   const map = useMap()
   const prev = useRef(null)
@@ -120,6 +155,11 @@ function FlyCtrl({ target }) {
   return null
 }
 
+// =============================================================================
+// SMALL REUSABLE UI COMPONENTS
+// =============================================================================
+
+/** Toggle chip for industries / provinces / municipalities */
 function Chip({ label, selected, onClick, small = false }) {
   return (
     <button onClick={onClick}
@@ -133,6 +173,7 @@ function Chip({ label, selected, onClick, small = false }) {
   )
 }
 
+/** Simple key‑value row for the tender detail view */
 function DetailRow({ label, value, valueClass }) {
   if (!value) return null
   return (
@@ -143,6 +184,10 @@ function DetailRow({ label, value, valueClass }) {
   )
 }
 
+/**
+ * Full tender detail panel (shown in the right sidebar on desktop).
+ * Displays metadata, a link to the document, description, and contact info.
+ */
 function TenderDetailView({ tender, onClose }) {
   if (!tender) return null
   return (
@@ -197,30 +242,44 @@ function TenderDetailView({ tender, onClose }) {
 // MAIN COMPONENT
 // =============================================================================
 export default function Search() {
+  // ---------------------------------------------------------------------------
+  // Context & auth
+  // ---------------------------------------------------------------------------
   const { user, refreshUser, lastSearch, saveLastSearch } = useAuth()
 
+  // ---------------------------------------------------------------------------
+  // Filter state – initialised from lastSearch (persisted) or user preferences
+  // ---------------------------------------------------------------------------
   const [keyword, setKeyword] = useState(lastSearch?.keyword || '')
   const [selInd, setSelInd] = useState(lastSearch?.industries || user?.industry_preferences || [])
   const [selProv, setSelProv] = useState(lastSearch?.provinces || user?.province_preferences || [])
   const [selMunis, setSelMunis] = useState(lastSearch?.municipalities || [])
   const [showMunis, setShowMunis] = useState(false)
 
+  // Location & radius
   const [useMyLoc, setUseMyLoc] = useState(false)
   const [radiusKm, setRadiusKm] = useState(user?.search_radius_km || 100)
+  // Memoised user location object – only valid if coordinates are present and real
   const userLoc = useMemo(() => {
     if (!user?.business_lat || !user?.business_lng) return null
     if (!isValidCoord(user.business_lat, user.business_lng)) return null
     return { lat: Number(user.business_lat), lng: Number(user.business_lng), name: user.business_location || 'My location' }
   }, [user])
 
+  // ---------------------------------------------------------------------------
+  // Map visibility & navigation
+  // ---------------------------------------------------------------------------
   const [showMap, setShowMap] = useState(true)
-  const [flyTarget, setFlyTarget] = useState(null)
+  const [flyTarget, setFlyTarget] = useState(null)    // controls FlyCtrl
   const [mapData, setMapData] = useState({ districts: [], total: 0 })
   const [mapLoading, setMapLoading] = useState(false)
-  const [activePop, setActivePop] = useState(null)
-  const [selectedTender, setSelectedTender] = useState(null)
-  const [routes, setRoutes] = useState([])
+  const [activePop, setActivePop] = useState(null)     // which district popup is open
+  const [selectedTender, setSelectedTender] = useState(null)  // detail panel
+  const [routes, setRoutes] = useState([])             // OSRM driving routes
 
+  // ---------------------------------------------------------------------------
+  // Search results state
+  // ---------------------------------------------------------------------------
   const [results, setResults] = useState([])
   const [total, setTotal] = useState(0)
   const [charged, setCharged] = useState(0)
@@ -228,18 +287,27 @@ export default function Search() {
   const [searched, setSearched] = useState(false)
   const [page, setPage] = useState(1)
 
+  // UI toggles
   const [showFilters, setShowFilters] = useState(true)
   const [mobileTab, setMobileTab] = useState('filters')
 
+  // Guard to run the initial automatic search only once
   const initialLoadDone = useRef(false)
 
+  // ---------------------------------------------------------------------------
+  // Utility helpers
+  // ---------------------------------------------------------------------------
+  // Toggle an item in a list
   const tog = (list, set, v) => set(list.includes(v) ? list.filter(x => x !== v) : [...list, v])
+  // Count of active filters (for UI badge)
   const filterCount = selInd.length + selProv.length + selMunis.length + (useMyLoc && userLoc ? 1 : 0)
 
+  // Safe fly‑to target setter
   const setSafeFlyTarget = (center, zoom, key) => {
     setFlyTarget({ c: safeCenter(center), z: zoom, key })
   }
 
+  // Determine the initial map centre: user's town > province > country centre
   const mapCenter = useMemo(() => {
     if (user?.business_lat && user?.business_lng) {
       const c = safeCenter([user.business_lat, user.business_lng])
@@ -256,6 +324,7 @@ export default function Search() {
     return SA_ZOOM
   }, [user, selProv])
 
+  // Province chip click – toggles and flies to the province centre
   const handleProvToggle = (prov) => {
     const adding = !selProv.includes(prov)
     setSelProv(prev => adding ? [...prev, prov] : prev.filter(v => v !== prov))
@@ -264,11 +333,13 @@ export default function Search() {
     else setSafeFlyTarget(SA_CENTER, SA_ZOOM, 'sa' + Date.now())
   }
 
-  // ===========================================================================
-  // FIX: Map data fetch — use FREE /tenders/latest endpoint instead of
-  // /search/tenders which charges credits AND has a hard page_size=500 limit
-  // that was triggering 402s for users with < 500 credits.
-  // ===========================================================================
+  // ---------------------------------------------------------------------------
+  // MAP DATA FETCH (uses FREE /tenders/latest endpoint)
+  //
+  // We intentionally avoid /search/tenders here because that endpoint charges
+  // credits and has a hard page_size limit. /tenders/latest returns all
+  // matching tenders without cost, which is ideal for the map overview.
+  // ---------------------------------------------------------------------------
   const fetchMapData = useCallback(async () => {
     setMapLoading(true)
     try {
@@ -278,7 +349,7 @@ export default function Search() {
         selProv.length ? selProv : undefined,
       )
       const tenders = res.data.tenders || []
-      const dm = {}
+      const dm = {}  // district map: key → { province, district, tenders[] }
 
       for (const t of tenders) {
         let placed = false
@@ -298,6 +369,7 @@ export default function Search() {
           }
           if (placed) break
         }
+        // Fallback: if no district match, place in the first district of the province
         if (!placed && t.province && SA_LOCATIONS[t.province]) {
           const pD = SA_LOCATIONS[t.province]
           const fd = Object.keys(pD.districts)[0]
@@ -316,27 +388,30 @@ export default function Search() {
     }
   }, [JSON.stringify(selInd), JSON.stringify(selProv)])
 
+  // Refetch map data whenever the industry or province filter changes
   useEffect(() => { fetchMapData() }, [fetchMapData])
 
-  // ===========================================================================
-  // INITIAL LOAD
-  // ===========================================================================
+  // ---------------------------------------------------------------------------
+  // INITIAL LOAD – auto‑search on first visit
+  // ---------------------------------------------------------------------------
   useEffect(() => {
     if (!user || initialLoadDone.current) return
     initialLoadDone.current = true
     const indPref = user.industry_preferences || []
     const provPref = user.province_preferences || []
+    // Fly to the user's province or town on initial load
     if (provPref.length > 0 && PROVINCE_CENTERS[provPref[0]]) {
       setSafeFlyTarget(PROVINCE_CENTERS[provPref[0]], PROV_ZOOM, 'user-prov' + Date.now())
     } else if (user?.business_lat && user?.business_lng && isValidCoord(user.business_lat, user.business_lng)) {
       setSafeFlyTarget([user.business_lat, user.business_lng], TOWN_ZOOM, 'user-town' + Date.now())
     }
+    // Perform an initial search using user preferences (backend will auto‑filter)
     doSearch(1, indPref, provPref, [], '')
   }, [user?.id])
 
-  // ===========================================================================
-  // ROUTE FETCHING
-  // ===========================================================================
+  // ---------------------------------------------------------------------------
+  // DRIVING ROUTE FETCHING (OSRM – free, no API key)
+  // ---------------------------------------------------------------------------
   useEffect(() => {
     if (!user?.business_lat || !user?.business_lng || !isValidCoord(user.business_lat, user.business_lng) || results.length === 0) {
       setRoutes([]); return
@@ -345,6 +420,7 @@ export default function Search() {
     const fetchRoutes = async () => {
       const routeLines = []
       const uniqueLocations = new Map()
+      // Collect unique tender locations (up to 10)
       for (const tender of results.slice(0, 10)) {
         const coords = getTenderCoordinates(tender)
         if (coords && isValidCoord(coords.lat, coords.lng)) {
@@ -353,6 +429,7 @@ export default function Search() {
         }
       }
       const locations = [...uniqueLocations.values()].slice(0, 5)
+      // Fetch a route for each location from the user's business address
       for (const loc of locations) {
         if (cancelled) break
         const route = await getRoute(Number(user.business_lat), Number(user.business_lng), loc.lat, loc.lng)
@@ -366,9 +443,9 @@ export default function Search() {
     return () => { cancelled = true }
   }, [results, user])
 
-  // ===========================================================================
-  // SEARCH
-  // ===========================================================================
+  // ---------------------------------------------------------------------------
+  // SEARCH EXECUTION
+  // ---------------------------------------------------------------------------
   const doSearch = async (p = 1, industries = selInd, provinces = selProv, munis = selMunis, kw = keyword) => {
     setLoading(true)
     try {
@@ -381,10 +458,8 @@ export default function Search() {
         page_size: 20,
       }
 
-      // FIX: Only send location params when we actually have valid coordinates.
-      // Previously radius_km=100 was always sent even with null lat/lng,
-      // which caused confusing server-side behaviour and wasted the radius
-      // filter logic on every search.
+      // Only attach location parameters when the user has explicitly enabled
+      // "use my location" AND we have valid coordinates.
       if (useMyLoc && userLoc && isValidCoord(userLoc.lat, userLoc.lng)) {
         payload.user_lat = userLoc.lat
         payload.user_lng = userLoc.lng
@@ -397,7 +472,7 @@ export default function Search() {
       setCharged(res.data.credits_charged || 0)
       setPage(p)
       setSearched(true)
-      await refreshUser()
+      await refreshUser()          // update credit balance in context
       saveLastSearch({ industries, provinces, municipalities: munis, keyword: kw })
 
       if (res.data.results.length === 0 && (industries.length || provinces.length || munis.length || kw)) {
@@ -407,7 +482,7 @@ export default function Search() {
         setMobileTab('results')
       }
     } catch (err) {
-      // FIX: Handle 402 with structured error from backend
+      // Handle structured 402 (payment required) errors from the backend
       if (err.response?.status === 402) {
         const detail = err.response?.data?.error
         const balance = detail?.balance ?? detail?.credit_balance
@@ -423,8 +498,10 @@ export default function Search() {
     }
   }
 
+  // Public handler for the search button
   const handleSearch = () => doSearch(1)
 
+  // Clear all filters and perform an unfiltered search
   const clearFilters = () => {
     setKeyword(''); setSelInd([]); setSelProv([]); setSelMunis([])
     setUseMyLoc(false); setRoutes([])
@@ -432,15 +509,19 @@ export default function Search() {
     doSearch(1, [], [], [], '')
   }
 
+  // List of municipalities – scoped to selected provinces if any
   const muniList = useMemo(() => selProv.length ? selProv.flatMap(p => getMunicipalities(p)) : getMunicipalities(), [selProv])
+  // Visible district markers (filtered by selected provinces)
   const visibleDistricts = useMemo(() => mapData.districts.filter(d => (selProv.length ? selProv.includes(d.province) : true) && d.tenders.length > 0), [mapData, selProv])
+  // Group results by location for the results‑layer markers
   const groupedLocations = useMemo(() => groupTendersByLocation(results), [results])
 
   // ===========================================================================
-  // MAP COMPONENT
+  // THE MAP COMPONENT (extracted to keep JSX manageable)
   // ===========================================================================
   const TheMap = ({ scrollWheel = true }) => (
     <div className="relative w-full h-full">
+      {/* Top‑left overlay: tender count & loading indicator */}
       <div className="absolute top-3 left-3 z-10 pointer-events-none flex gap-2">
         <div className="bg-white rounded-full px-3 py-1.5 shadow border border-gray-200 flex items-center gap-1.5">
           <TrendingUp size={12} className="text-brand-400" />
@@ -448,7 +529,9 @@ export default function Search() {
           {mapLoading && <Loader size={11} className="animate-spin text-gray-300 ml-1" />}
         </div>
       </div>
+      {/* Hide map button (mobile) */}
       <button onClick={() => setShowMap(false)} className="absolute top-3 right-3 z-10 bg-white rounded-full px-3 py-1.5 shadow border border-gray-200 flex items-center gap-1.5 text-xs text-gray-500 hover:text-brand-600"><EyeOff size={11} /> Hide map</button>
+      {/* Bottom‑right legend: tender count colours & routes */}
       <div className="absolute bottom-8 right-3 z-10 bg-white rounded-xl px-3 py-2 shadow border border-gray-200">
         <p className="text-xs text-gray-400 mb-1.5 font-medium">Tenders</p>
         {[['#FEE2E2','1–5'],['#FCA5A5','6–20'],['#F87171','21–50'],['#EF4444','51–100'],['#DC2626','100+']].map(([c,l]) => (
@@ -470,19 +553,23 @@ export default function Search() {
       <MapContainer center={mapCenter} zoom={mapZoom} maxBounds={SA_BOUNDS} maxBoundsViscosity={1.0} minZoom={5} maxZoom={14} style={{ height: '100%', width: '100%' }} scrollWheelZoom={scrollWheel}>
         <TileLayer attribution={MAP_ATTRIBUTION} url={MAP_TILE_URL} bounds={SA_BOUNDS} />
         <FlyCtrl target={flyTarget} />
+        {/* Driving route lines */}
         {routes.map((route, index) => (
           <Polyline key={`route-${index}`} positions={route.positions} pathOptions={{ color: route.color, weight: 3, opacity: 0.7, dashArray: '8 8' }}>
             <Popup><p className="text-xs font-semibold">Route to {route.name}</p><p className="text-xs text-gray-500">Driving directions via OSRM</p></Popup>
           </Polyline>
         ))}
+        {/* User's location marker (green dot) */}
         {user?.business_lat && user?.business_lng && isValidCoord(user.business_lat, user.business_lng) && (
           <Marker position={[Number(user.business_lat), Number(user.business_lng)]} icon={L.divIcon({ className: '', html: `<div style="width:18px;height:18px;background:#1D9E75;border:3px solid white;border-radius:50%;box-shadow:0 0 0 5px rgba(29,158,117,0.3);"></div>`, iconSize: [18,18], iconAnchor: [9,9] })}>
             <Popup><strong>{user.business_location || 'Your location'}</strong></Popup>
           </Marker>
         )}
+        {/* Radius circle when "use my location" is active */}
         {useMyLoc && userLoc && (
           <Circle center={[userLoc.lat, userLoc.lng]} radius={radiusKm * 1000} pathOptions={{ color: '#1D9E75', fillColor: '#1D9E75', fillOpacity: .05, weight: 1.5, dashArray: '5 5' }} />
         )}
+        {/* District cluster markers */}
         {visibleDistricts.map(d => {
           const count = d.tenders.length
           const isSel = activePop === d.key
@@ -526,6 +613,7 @@ export default function Search() {
             </Marker>
           )
         })}
+        {/* Grouped result markers (shown when search results are loaded) */}
         {groupedLocations.map((group, index) => {
           const iconConfig = createGroupedMarkerIcon(group.count, group.type)
           return (
@@ -557,21 +645,28 @@ export default function Search() {
     </div>
   )
 
+  // ===========================================================================
+  // FILTER PANEL (desktop sidebar / mobile tab)
+  // ===========================================================================
   const FiltersPanel = () => (
     <div className="h-full overflow-y-auto bg-white">
       <div className="p-4 space-y-5">
+        {/* Keyword input */}
         <div className="relative">
           <SearchIcon size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
           <input className="input pl-9 text-sm" placeholder="Keyword..." value={keyword} onChange={e => setKeyword(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSearch()} />
         </div>
+        {/* Industry chips */}
         <div>
           <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Industry</p>
           <div className="flex flex-wrap gap-1.5">{INDUSTRIES.map(i => <Chip key={i} label={i} selected={selInd.includes(i)} onClick={() => tog(selInd, setSelInd, i)} />)}</div>
         </div>
+        {/* Province chips – clicking also flies the map */}
         <div>
           <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">Province <span className="font-normal text-gray-300 normal-case">(click to zoom map)</span></p>
           <div className="flex flex-wrap gap-1.5">{PROVINCES.map(p => <Chip key={p} label={p} selected={selProv.includes(p)} onClick={() => handleProvToggle(p)} />)}</div>
         </div>
+        {/* Location toggle & radius slider */}
         {userLoc && (
           <div>
             <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Location</p>
@@ -589,18 +684,21 @@ export default function Search() {
             )}
           </div>
         )}
+        {/* Municipality expandable filter */}
         <div>
           <button onClick={() => setShowMunis(v => !v)} className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-700 font-medium">
             {showMunis ? <ChevronUp size={11} /> : <ChevronDown size={11} />} Municipality filter {selMunis.length > 0 && <span className="px-1.5 py-0.5 bg-brand-100 text-brand-700 rounded-full">{selMunis.length}</span>}
           </button>
           {showMunis && <div className="mt-2 max-h-36 overflow-y-auto flex flex-wrap gap-1.5">{muniList.slice(0, 60).map(m => <Chip key={m} label={m} small selected={selMunis.includes(m)} onClick={() => tog(selMunis, setSelMunis, m)} />)}</div>}
         </div>
+        {/* Map toggle (desktop only) */}
         <div className="hidden md:flex items-center justify-between py-2 border-t border-gray-100">
           <span className="text-xs text-gray-500">Map</span>
           <button onClick={() => setShowMap(v => !v)} className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border ${showMap ? 'bg-brand-50 border-brand-200 text-brand-700' : 'bg-white border-gray-200 text-gray-500'}`}>
             {showMap ? <><Eye size={11} /> On</> : <><EyeOff size={11} /> Off</>}
           </button>
         </div>
+        {/* Search & clear buttons */}
         <div className="pb-2 space-y-2">
           <button onClick={handleSearch} disabled={loading} className="btn-primary w-full py-2.5 text-sm flex items-center justify-center gap-2">
             {loading ? <><Loader size={14} className="animate-spin" /> Searching...</> : <>Search{filterCount > 0 ? ` (${filterCount} filter${filterCount > 1 ? 's' : ''})` : ''}</>}
@@ -611,6 +709,9 @@ export default function Search() {
     </div>
   )
 
+  // ===========================================================================
+  // RESULTS PANEL
+  // ===========================================================================
   const ResultsPanel = () => (
     <div className="h-full overflow-y-auto bg-gray-50">
       <div className="p-4 space-y-3">
@@ -635,6 +736,7 @@ export default function Search() {
         {!loading && results.map(t => (
           <TenderCard key={t.id} tender={t} showBadgeColor onView={(tender) => setSelectedTender(tender)} />
         ))}
+        {/* Pagination – only show when there are more than 20 results */}
         {total > 20 && !loading && (
           <div className="flex items-center justify-center gap-3 pt-2 pb-4">
             <button onClick={() => doSearch(page - 1)} disabled={page === 1} className="btn-secondary text-xs py-1.5 px-3">← Prev</button>
@@ -646,8 +748,12 @@ export default function Search() {
     </div>
   )
 
+  // ===========================================================================
+  // MAIN RENDER
+  // ===========================================================================
   return (
     <div className="flex flex-col overflow-hidden" style={{ height: 'calc(100vh - 0px)' }}>
+      {/* Top bar – title, result count, filter/map toggles */}
       <div className="flex-shrink-0 bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between gap-3">
         <div className="min-w-0">
           <h1 className="text-base font-semibold text-gray-900">Search tenders</h1>
@@ -663,7 +769,9 @@ export default function Search() {
         </div>
       </div>
 
-      {/* Desktop layout */}
+      {/* =====================================================================
+          DESKTOP LAYOUT (md+): Filters | Results | Map (side by side)
+          ===================================================================== */}
       <div className="hidden md:flex flex-1 overflow-hidden">
         {showFilters && <div className="w-72 flex-shrink-0 border-r border-gray-200 overflow-hidden"><FiltersPanel /></div>}
         <div className="flex-1 flex overflow-hidden">
@@ -675,7 +783,9 @@ export default function Search() {
         </div>
       </div>
 
-      {/* Mobile layout */}
+      {/* =====================================================================
+          MOBILE LAYOUT (below md): Tab bar → Filters | Results | Map
+          ===================================================================== */}
       <div className="md:hidden flex-1 flex flex-col overflow-hidden">
         <div className="flex-shrink-0 flex border-b border-gray-200 bg-white">
           {[{ id: 'filters', label: 'Filters', badge: filterCount }, { id: 'results', label: total > 0 ? `Results (${total})` : 'Results' }, { id: 'map', label: 'Map' }].map(tab => (
@@ -704,6 +814,7 @@ export default function Search() {
         </div>
       </div>
 
+      {/* Leaflet popup & control styling overrides */}
       <style>{`
         .leaflet-popup-content-wrapper { border-radius: 12px !important; border: 1px solid #e5e7eb !important; box-shadow: 0 8px 24px rgba(0,0,0,.12) !important; padding: 0 !important; }
         .leaflet-popup-content { margin: 12px !important; min-width: 0 !important; }
