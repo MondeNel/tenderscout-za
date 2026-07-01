@@ -10,7 +10,10 @@
  *   - Real-time polling for new tenders (every 60 seconds)
  * 
  * KEY FEATURE: The dashboard loads tenders based on the user's
- * saved location (province/town from registration).
+ * saved location (province/town from registration) and
+ * automatically applies their industry/province preferences
+ * from the user profile (the backend enforces this when no
+ * filters are explicitly provided).
  */
 
 import { useState, useEffect, useRef } from 'react'
@@ -21,30 +24,48 @@ import TenderCard from '../components/TenderCard'
 import toast from 'react-hot-toast'
 
 export default function Dashboard() {
+  // Access the current user, refresh function, and last search state
   const { user, refreshUser, lastSearch } = useAuth()
   
-  const [tenders, setTenders] = useState([])
+  // --- State ---
+  const [tenders, setTenders] = useState([])       // tenders currently displayed
   const [loading, setLoading] = useState(true)
-  const [total, setTotal] = useState(0)
-  const [newCount, setNewCount] = useState(0)
-  const [pendingTenders, setPendingTenders] = useState([])
+  const [total, setTotal] = useState(0)            // total matching tenders (for stats)
+  const [newCount, setNewCount] = useState(0)      // count of tenders found since last poll
+  const [pendingTenders, setPendingTenders] = useState([]) // new tenders not yet loaded into the view
   
+  // Track the timestamp of the last successful scrape/poll so we only fetch new
+  // tenders since that point. Initialised to now to avoid fetching old data on startup.
   const lastScrapeRef = useRef(new Date().toISOString())
-  const pollRef = useRef(null)
-  const initialLoadDone = useRef(false)
+  const pollRef = useRef(null)                     // interval reference for cleanup
+  const initialLoadDone = useRef(false)            // ensures we only load on first user
 
   // ===========================================================================
   // SEARCH PAYLOAD BUILDER
   // ===========================================================================
+  
+  /**
+   * Builds the payload for the search and latest-tender API calls.
+   * 
+   * Priority:
+   * 1. If the user has a saved lastSearch (from the Search page), use those
+   *    filters. This lets them return to the dashboard with the same filter set.
+   * 2. Otherwise fall back to the user's saved preferences (industry, province).
+   * 3. Always includes the user's business location for radius-based filtering
+   *    when coordinates are available.
+   */
   const getPayload = () => {
+    // Determine industries: explicit search > user preferences
     const ind = lastSearch?.industries?.length 
       ? lastSearch.industries 
       : (user?.industry_preferences || [])
     
+    // Determine provinces: explicit search > user preferences
     const prov = lastSearch?.provinces?.length 
       ? lastSearch.provinces 
       : (user?.province_preferences || [])
     
+    // Municipalities are only set from an explicit search (no user preference fallback)
     const muni = lastSearch?.municipalities?.length 
       ? lastSearch.municipalities 
       : []
@@ -57,7 +78,8 @@ export default function Dashboard() {
       page_size: 20 
     }
 
-    // Use user's saved location for distance-based filtering
+    // Attach the user's business location for distance-based sorting/filtering.
+    // The backend uses this to order tenders by proximity when a radius is given.
     if (user?.business_lat && user?.business_lng) {
       payload.user_lat = user.business_lat
       payload.user_lng = user.business_lng
@@ -70,6 +92,12 @@ export default function Dashboard() {
   // ===========================================================================
   // DATA LOADING
   // ===========================================================================
+  
+  /**
+   * Fetch the full list of tenders matching the current filters.
+   * This is the initial load and is also called when the user clicks Refresh
+   * or when the lastSearch changes.
+   */
   const loadTenders = async () => {
     setLoading(true)
     const { payload } = getPayload()
@@ -78,6 +106,7 @@ export default function Dashboard() {
       const res = await searchTenders(payload)
       setTenders(res.data.results)
       setTotal(res.data.total)
+      // Refresh user data (credits may have been deducted, etc.)
       await refreshUser()
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Failed to load tenders')
@@ -86,6 +115,12 @@ export default function Dashboard() {
     }
   }
 
+  /**
+   * Poll for new tenders since the last scrape timestamp.
+   * Uses the GET /tenders/latest endpoint with 'since' parameter.
+   * If new tenders are found, they are stored in pendingTenders and
+   * the user is shown a notification bar rather than auto-inserting them.
+   */
   const pollForNew = async () => {
     const { payload } = getPayload()
     try {
@@ -95,24 +130,39 @@ export default function Dashboard() {
       const res = await getLatest(lastScrapeRef.current, ind, prov, muni)
       
       if (res.data.new_count > 0) {
+        // Store the new tenders; they'll be merged when the user clicks "Load"
         setPendingTenders(res.data.tenders)
         setNewCount(res.data.new_count)
         lastScrapeRef.current = new Date().toISOString()
       }
-    } catch {}
+    } catch {
+      // Polling failures are silently ignored – not critical enough to disrupt the UI
+    }
   }
 
+  /**
+   * Manually merge the pending new tenders into the visible list.
+   * Triggered by the "Load" button in the notification bar.
+   */
   const loadNewTenders = () => {
+    // Prepend new tenders so they appear at the top of the list
     setTenders(prev => [...pendingTenders, ...prev])
     setTotal(prev => prev + pendingTenders.length)
     setPendingTenders([])
     setNewCount(0)
+    // Refresh credits after the insert (optional, since loadTenders would also do it)
     refreshUser()
   }
 
   // ===========================================================================
   // EFFECTS
   // ===========================================================================
+  
+  /**
+   * On initial mount (when user becomes available), load tenders once.
+   * The guard `initialLoadDone` prevents re-fetching on subsequent renders
+   * unless the user object itself changes (e.g., login/logout).
+   */
   useEffect(() => {
     if (user && !initialLoadDone.current) {
       initialLoadDone.current = true
@@ -120,6 +170,11 @@ export default function Dashboard() {
     }
   }, [user])
 
+  /**
+   * When the lastSearch object changes (e.g., user performed a new search
+   * and navigated back to the dashboard), reload the tenders.
+   * We compare the serialized search object to avoid deep comparison.
+   */
   const lastSearchKey = JSON.stringify(lastSearch)
   const prevSearchKey = useRef(lastSearchKey)
   
@@ -131,6 +186,11 @@ export default function Dashboard() {
     }
   }, [lastSearchKey])
 
+  /**
+   * Start polling for new tenders every 60 seconds.
+   * Cleanup the interval when the component unmounts or when the user/lastSearch
+   * change (to avoid stale closures).
+   */
   useEffect(() => {
     pollRef.current = setInterval(pollForNew, 60000)
     return () => clearInterval(pollRef.current)
@@ -139,12 +199,15 @@ export default function Dashboard() {
   // ===========================================================================
   // COMPUTED DISPLAY VALUES
   // ===========================================================================
+  
   const { ind, prov, muni } = getPayload()
   const isFromSearch = lastSearch?.industries?.length > 0 || lastSearch?.provinces?.length > 0
   
+  // Extract user location for the greeting line
   const userProvince = user?.province_preferences?.[0]
   const userTown = user?.business_location
   
+  // Dynamically generate the time‑of‑day greeting
   const greeting = new Date().getHours() < 12 
     ? 'Good morning' 
     : new Date().getHours() < 17 
@@ -153,7 +216,9 @@ export default function Dashboard() {
 
   return (
     <div className="p-4 md:p-6 max-w-4xl mx-auto">
-      {/* Header */}
+      {/* ===================================================================
+          HEADER – greeting, tender count, location badge, refresh button
+          =================================================================== */}
       <div className="flex items-start justify-between mb-4 md:mb-6">
         <div>
           <h1 className="text-lg md:text-xl font-semibold text-gray-900">
@@ -163,7 +228,7 @@ export default function Dashboard() {
             {total} tenders{isFromSearch ? ' — filtered by your last search' : ' matching your preferences'}
           </p>
           
-          {/* Show user's location from registration */}
+          {/* Show the user's saved location from their profile */}
           {(userProvince || userTown) && (
             <div className="flex items-center gap-1 mt-1 text-xs text-brand-600">
               <MapPin size={11} />
@@ -176,17 +241,21 @@ export default function Dashboard() {
         </div>
         
         <div className="flex items-center gap-2">
+          {/* Live indicator (desktop only) – a subtle "pulse" dot */}
           <span className="hidden md:flex items-center gap-1.5 text-xs text-gray-400">
             <span className="w-1.5 h-1.5 rounded-full bg-brand-400 animate-pulse" />
             Live
           </span>
+          {/* Manual refresh button – re-fetches the full tender list */}
           <button onClick={loadTenders} className="p-1.5 rounded-lg hover:bg-gray-100 border border-gray-200" aria-label="Refresh">
             <RefreshCw size={14} />
           </button>
         </div>
       </div>
 
-      {/* Filter chips */}
+      {/* ===================================================================
+          FILTER CHIPS – show which filters are currently active
+          =================================================================== */}
       {(isFromSearch || muni.length > 0) && (
         <div className="mb-4 flex flex-wrap gap-1.5">
           {ind.map(i => (
@@ -201,7 +270,9 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* New tenders notification */}
+      {/* ===================================================================
+          NEW TENDERS NOTIFICATION BAR – appears after polling finds new items
+          =================================================================== */}
       {newCount > 0 && (
         <div className="mb-4 flex items-center justify-between bg-brand-50 border border-brand-200 rounded-xl px-4 py-3">
           <span className="text-sm text-brand-600">{newCount} new tender{newCount > 1 ? 's' : ''} found</span>
@@ -209,7 +280,9 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Stats */}
+      {/* ===================================================================
+          STATS CARDS – quick overview of total tenders, credits, filters
+          =================================================================== */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-3 mb-4 md:mb-6">
         {[
           { label: 'Total tenders', val: total, sub: 'matching filters' },
@@ -225,7 +298,9 @@ export default function Dashboard() {
         ))}
       </div>
 
-      {/* Tender list */}
+      {/* ===================================================================
+          TENDER LIST – loading spinner, empty state, or the list of cards
+          =================================================================== */}
       {loading ? (
         <div className="flex justify-center py-16">
           <div className="w-6 h-6 border-2 border-brand-400 border-t-transparent rounded-full animate-spin" />
