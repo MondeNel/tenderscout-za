@@ -1,3 +1,14 @@
+/**
+ * File: src/App.jsx
+ * Purpose: Root application component – sets up routing, authentication
+ *          guards, and the main layout.
+ *
+ * This file is the entry point for the React app. It wraps the entire
+ * component tree in the AuthProvider, defines the route structure (public,
+ * private, and 404), and provides reusable components for loading states
+ * and route protection.
+ */
+
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import Login from './pages/Login'
@@ -12,7 +23,16 @@ import Layout from './components/Layout'
 // =============================================================================
 // LOADING SPINNER COMPONENT
 // =============================================================================
+
+/**
+ * Reusable loading spinner with optional full‑screen mode and size variants.
+ *
+ * @param {boolean} fullScreen  - if true, the spinner is vertically centred on the viewport.
+ * @param {string}  size        - 'sm', 'md', or 'lg' (default 'md').
+ * @param {string}  message     - optional text shown below the spinner.
+ */
 function LoadingSpinner({ fullScreen = false, size = 'md', message }) {
+  // Map size prop to Tailwind classes
   const sizeClasses = {
     sm: 'w-4 h-4 border-2',
     md: 'w-6 h-6 border-2',
@@ -39,9 +59,18 @@ function LoadingSpinner({ fullScreen = false, size = 'md', message }) {
 // =============================================================================
 // PRIVATE ROUTE GUARD
 // =============================================================================
+
+/**
+ * Wraps routes that require authentication.
+ *
+ * While the auth context is still loading (e.g., after a page refresh), a
+ * full‑screen spinner is shown. Once loading completes, the user is either
+ * granted access to the child components or redirected to /login.
+ */
 function PrivateRoute({ children }) {
   const { user, loading } = useAuth()
   
+  // Session verification in progress – avoid a flash of the login page
   if (loading) {
     return (
       <LoadingSpinner 
@@ -52,15 +81,25 @@ function PrivateRoute({ children }) {
     )
   }
   
+  // If there's a valid user, render the protected content; otherwise redirect
   return user ? children : <Navigate to="/login" replace />
 }
 
 // =============================================================================
 // PUBLIC ROUTE GUARD
 // =============================================================================
+
+/**
+ * Wraps routes that should only be accessible to unauthenticated users
+ * (login, register).
+ *
+ * If a user is already logged in, they are redirected to the dashboard to
+ * avoid seeing the login / registration forms again.
+ */
 function PublicRoute({ children }) {
   const { user, loading } = useAuth()
   
+  // Don't flash any content while the auth state is being restored
   if (loading) return null
   
   return user ? <Navigate to="/dashboard" replace /> : children
@@ -69,20 +108,31 @@ function PublicRoute({ children }) {
 // =============================================================================
 // ROOT APP COMPONENT
 // =============================================================================
+
 export default function App() {
   return (
+    // AuthProvider must wrap the entire tree so that useAuth() is available
+    // inside route components and guards.
     <AuthProvider>
       <Routes>
+        {/* Default route redirects to the dashboard */}
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
         
-        {/* Public Routes */}
+        {/* ----------------------------------------------------------------
+            PUBLIC ROUTES (only accessible when not logged in)
+            ---------------------------------------------------------------- */}
         <Route path="/login" element={<PublicRoute><Login /></PublicRoute>} />
         <Route path="/register" element={<PublicRoute><Register /></PublicRoute>} />
         
-        {/* Onboarding (Private, no Layout) */}
+        {/* ----------------------------------------------------------------
+            ONBOARDING (private, but without the standard Layout wrapper)
+            ---------------------------------------------------------------- */}
         <Route path="/onboarding" element={<PrivateRoute><Onboarding /></PrivateRoute>} />
         
-        {/* Protected Routes with Layout */}
+        {/* ----------------------------------------------------------------
+            PROTECTED ROUTES WITH LAYOUT
+            These routes share the common Layout component (sidebar, header).
+            ---------------------------------------------------------------- */}
         <Route element={<PrivateRoute><Layout /></PrivateRoute>}>
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/search" element={<Search />} />
@@ -90,7 +140,9 @@ export default function App() {
           <Route path="/topup" element={<TopUp />} />
         </Route>
         
-        {/* 404 Not Found */}
+        {/* ----------------------------------------------------------------
+            404 NOT FOUND – any unmatched path shows a simple fallback page
+            ---------------------------------------------------------------- */}
         <Route path="*" element={
           <div className="min-h-screen flex items-center justify-center bg-gray-50">
             <div className="text-center p-8">
