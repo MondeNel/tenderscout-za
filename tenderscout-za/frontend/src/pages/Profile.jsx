@@ -1,29 +1,58 @@
+/**
+ * File: src/pages/Profile.jsx
+ * Purpose: Company Profile Page — view and edit company details,
+ *          including industry preferences.
+ *
+ * This component lets the user see their saved company profile
+ * (name, registration number, BEE level, size, industries, location)
+ * and switch to an editing mode where they can update any field.
+ *
+ * It uses the AuthContext to read the current user and to update
+ * the context after a successful save, so the rest of the app
+ * immediately reflects the new profile data.
+ */
+
 import React, { useState, useContext, useEffect } from 'react';
 import { AuthContext } from '../context/AuthContext';
 import IndustryCheckboxGroup from '../components/IndustryCheckboxGroup';
 import axios from 'axios';
 
+// Base URL for the backend API — defaults to localhost in development
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 const Profile = () => {
+  // ---------------------------------------------------------------------------
+  // Context – currentUser is the logged‑in user; updateUser updates the context
+  // after a successful profile edit.
+  // ---------------------------------------------------------------------------
   const { currentUser, updateUser } = useContext(AuthContext);
+
+  // Toggle between viewing (false) and editing (true)
   const [editing, setEditing] = useState(false);
+
+  // Local form state — initialised from currentUser whenever the user changes
   const [form, setForm] = useState({
     company_name: '',
     registration_number: '',
     bee_level: '',
     company_size: '',
-    industries: [],
+    industries: [],          // selected industry names
     business_location: '',
-    business_lat: '',
+    business_lat: '',        // stored as string to keep the input field happy
     business_lng: '',
     search_radius_km: 100,
     province_preferences: [],
     town_preferences: [],
     municipality_preferences: [],
   });
+
+  // Success or error message shown at the top of the card
   const [message, setMessage] = useState('');
 
+  // ---------------------------------------------------------------------------
+  // Populate the form whenever the user object changes (e.g., after login or
+  // context refresh). Coordinates are converted to strings for the text inputs.
+  // ---------------------------------------------------------------------------
   useEffect(() => {
     if (currentUser) {
       setForm({
@@ -43,11 +72,19 @@ const Profile = () => {
     }
   }, [currentUser]);
 
+  // ---------------------------------------------------------------------------
+  // Generic input handler – updates the corresponding field in local state.
+  // ---------------------------------------------------------------------------
   const handleChange = (e) => {
     const { name, value } = e.target;
     setForm(prev => ({ ...prev, [name]: value }));
   };
 
+  // ---------------------------------------------------------------------------
+  // Save handler – builds the payload (converting coordinate strings back to
+  // floats), calls PUT /user/preferences, updates the AuthContext, and returns
+  // to view mode on success.
+  // ---------------------------------------------------------------------------
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
@@ -68,7 +105,7 @@ const Profile = () => {
       const { data } = await axios.put(`${API_BASE}/user/preferences`, payload, {
         headers: { Authorization: `Bearer ${localStorage.getItem('access_token')}` },
       });
-      updateUser(data); // update context with new user data
+      updateUser(data); // immediately reflect changes across the app
       setMessage('Profile updated successfully');
       setEditing(false);
     } catch (err) {
@@ -76,13 +113,27 @@ const Profile = () => {
     }
   };
 
+  // ---------------------------------------------------------------------------
+  // Guard – if the user hasn't loaded yet, show a loading message.
+  // In practice the AuthContext provides this quickly.
+  // ---------------------------------------------------------------------------
   if (!currentUser) return <div>Loading...</div>;
 
+  // ---------------------------------------------------------------------------
+  // RENDER
+  // ---------------------------------------------------------------------------
   return (
     <div className="max-w-2xl mx-auto p-4">
       <h1 className="text-2xl font-bold mb-4">Company Profile</h1>
+
+      {/* Status message (success or error) */}
       {message && <p className="mb-4 text-green-600">{message}</p>}
+
       {!editing ? (
+        /* ===================================================================
+           VIEW MODE – shows all company fields as plain text.
+           The user clicks "Edit Profile" to switch to editing mode.
+           =================================================================== */
         <div className="space-y-2">
           <p><strong>Company:</strong> {currentUser.company_name || 'N/A'}</p>
           <p><strong>Reg No:</strong> {currentUser.registration_number || 'N/A'}</p>
@@ -90,9 +141,16 @@ const Profile = () => {
           <p><strong>Size:</strong> {currentUser.company_size || 'N/A'}</p>
           <p><strong>Industries:</strong> {currentUser.industry_preferences?.join(', ') || 'None selected'}</p>
           <p><strong>Location:</strong> {currentUser.business_location || 'N/A'}</p>
-          <button onClick={() => setEditing(true)} className="mt-4 bg-indigo-600 text-white px-4 py-2 rounded">Edit Profile</button>
+          <button onClick={() => setEditing(true)} className="mt-4 bg-indigo-600 text-white px-4 py-2 rounded">
+            Edit Profile
+          </button>
         </div>
       ) : (
+        /* ===================================================================
+           EDIT MODE – form with all fields.
+           Industries use the reusable IndustryCheckboxGroup component.
+           The Cancel button discards changes and returns to view mode.
+           =================================================================== */
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
             <div>
