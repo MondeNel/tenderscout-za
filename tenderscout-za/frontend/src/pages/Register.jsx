@@ -328,55 +328,7 @@ export default function Register() {
               </div>
             </div>
 
-            {/* =================================================================
-                INDUSTRY SELECTION (DROPDOWN)
-                ================================================================= */}
-            <div className="border-t border-gray-100 pt-4">
-              <div className="flex items-center gap-2 mb-3">
-                <span className="text-sm font-medium text-gray-700">
-                  Industries you serve
-                </span>
-              </div>
-              <p className="text-xs text-gray-500 mb-3">
-                Select one or more industries (hold Ctrl/Cmd to select multiple).
-                Your dashboard will show only relevant tenders.
-              </p>
-              <select
-                multiple
-                size={6}
-                className="input py-2 text-sm w-full"
-                value={form.industries}
-                onChange={handleIndustriesChange}
-              >
-                {/* Note: This list can be fetched from /user/industries endpoint,
-                    but for now we duplicate the 20 standard categories. */}
-                {[
-                  "Security Services",
-                  "Construction",
-                  "Waste Management",
-                  "Electrical Services",
-                  "Plumbing",
-                  "ICT / Technology",
-                  "Maintenance",
-                  "Mining Services",
-                  "Cleaning Services",
-                  "Catering",
-                  "Consulting",
-                  "Transport & Logistics",
-                  "Healthcare",
-                  "Landscaping",
-                  "Materials, Supply & Services",
-                  "HR & Training",
-                  "Accounting, Banking & Legal",
-                  "Media & Marketing",
-                  "Travel, Tourism & Hospitality",
-                  "Engineering Consultants",
-                ].map(ind => (
-                  <option key={ind} value={ind}>{ind}</option>
-                ))}
-              </select>
-            </div>
-
+        
             {/* =================================================================
                 LOCATION SELECTION
                 ================================================================= */}

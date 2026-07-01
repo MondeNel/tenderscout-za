@@ -1,17 +1,24 @@
-// Create components/ErrorBoundary.jsx
+// components/ErrorBoundary.jsx
+// React error boundary that catches render‑time errors in the component tree
+// and shows a user‑friendly fallback UI instead of a blank screen.
+// It also logs the error and shows a toast notification via react‑hot‑toast.
+
 import React from 'react';
 import toast from 'react-hot-toast';
 
 class ErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
+    // Track whether an error has occurred and the error itself
     this.state = { hasError: false, error: null };
   }
 
+  // Update state so the next render shows the fallback UI
   static getDerivedStateFromError(error) {
     return { hasError: true, error };
   }
 
+  // Log the error (console + toast) for debugging
   componentDidCatch(error, errorInfo) {
     console.error('App crashed:', error, errorInfo);
     toast.error('Something went wrong. Please refresh the page.');
@@ -19,6 +26,7 @@ class ErrorBoundary extends React.Component {
 
   render() {
     if (this.state.hasError) {
+      // Fallback UI when any child component throws during rendering
       return (
         <div className="flex items-center justify-center h-screen">
           <div className="text-center">
@@ -34,6 +42,8 @@ class ErrorBoundary extends React.Component {
         </div>
       );
     }
+
+    // No error – render children normally
     return this.props.children;
   }
 }
