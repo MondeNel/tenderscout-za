@@ -8,9 +8,12 @@
  *   - Select one or more industries from a dropdown (multi‑select)
  *   - Choose province and town (for map centering)
  *   - Get 5 free credits on signup
+ *
+ * After a successful registration the user is automatically logged in,
+ * their profile is fetched, and they are redirected to the dashboard.
  */
 
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { register, getProfile } from '../api/auth'
@@ -18,6 +21,7 @@ import { SA_LOCATIONS, getTowns, findTown } from '../data/saLocations'
 import { Zap, Eye, EyeOff, Check, X, MapPin, Building2 } from 'lucide-react'
 import toast from 'react-hot-toast'
 
+// All 9 South African provinces, derived from the SA_LOCATIONS data
 const PROVINCES = Object.keys(SA_LOCATIONS)
 
 export default function Register() {
@@ -25,6 +29,8 @@ export default function Register() {
   // STATE
   // ===========================================================================
 
+  // Form fields – each field corresponds to a property expected by the
+  // backend's POST /auth/register endpoint.
   const [form, setForm] = useState({
     full_name: '',
     email: '',
@@ -33,19 +39,21 @@ export default function Register() {
     registration_number: '',
     bee_level: '',
     company_size: '',
-    industries: [],
+    industries: [],       // selected industry names (multi‑select)
     province: '',
     town: '',
   })
 
-  const [loading, setLoading] = useState(false)
-  const [showPassword, setShowPassword] = useState(false)
-  const [passwordTouched, setPasswordTouched] = useState(false)
+  // UI state
+  const [loading, setLoading] = useState(false)           // true while API call is in flight
+  const [showPassword, setShowPassword] = useState(false) // toggle password visibility
+  const [passwordTouched, setPasswordTouched] = useState(false) // show validation feedback
 
   // ===========================================================================
   // HOOKS
   // ===========================================================================
 
+  // Auth context – provides loginUser to set the session after registration
   const { loginUser } = useAuth()
   const navigate = useNavigate()
 
@@ -53,44 +61,64 @@ export default function Register() {
   // COMPUTED VALUES
   // ===========================================================================
 
+  // Password validation: at least 8 characters.
   const passwordRequirements = [
     { label: 'At least 8 characters', met: form.password.length >= 8 },
   ]
 
   const isPasswordValid = passwordRequirements.every(req => req.met)
+
+  // Form is valid when name, email are non‑empty and password meets requirements
   const isFormValid =
     form.full_name.trim().length > 0 &&
     form.email.trim().length > 0 &&
     isPasswordValid
 
-  // Get towns for selected province
+  // Dynamically load towns when a province is selected
   const townOptions = form.province ? getTowns(form.province) : []
 
   // ===========================================================================
   // FORM HANDLERS
   // ===========================================================================
 
+  /**
+   * Generic input change handler.
+   * @param {string} field - Form field name
+   * @param {string} value - New value
+   */
   const handleChange = (field, value) => {
     setForm(prev => {
       const updated = { ...prev, [field]: value }
+      // Clear town when province changes so the user can't keep a town that
+      // doesn't belong to the new province.
       if (field === 'province') {
         updated.town = ''
       }
       return updated
     })
 
+    // Mark password as touched when the user starts typing
     if (field === 'password' && !passwordTouched) {
       setPasswordTouched(true)
     }
   }
 
+  /**
+   * Multi‑select industry dropdown handler.
+   * Extracts all currently selected options and updates the industries array.
+   */
   const handleIndustriesChange = (e) => {
     const options = Array.from(e.target.selectedOptions, option => option.value)
     setForm(prev => ({ ...prev, industries: options }))
   }
 
   /**
-   * Handle form submission
+   * Submit the registration form.
+   * 1. Validate password.
+   * 2. Build the API payload, including optional company fields.
+   * 3. If a town is selected, look up its coordinates and send them.
+   * 4. Call the register API, store the token, fetch the profile, update context.
+   * 5. Redirect to dashboard on success.
    */
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -104,23 +132,28 @@ export default function Register() {
     setLoading(true)
 
     try {
+      // Build the minimal payload
       const payload = {
         email: form.email,
         full_name: form.full_name,
         password: form.password,
         industries: form.industries,
+        // Send undefined rather than empty strings for optional fields so the
+        // backend treats them as null.
         company_name: form.company_name || undefined,
         registration_number: form.registration_number || undefined,
         bee_level: form.bee_level || undefined,
         company_size: form.company_size || undefined,
       }
 
+      // Attach location data
       if (form.province) {
         payload.province = form.province
       }
 
       if (form.town) {
         payload.town = form.town
+        // Look up the town's coordinates from the static location data
         const townData = findTown(form.town)
         if (townData) {
           payload.business_location = townData.name
@@ -128,22 +161,29 @@ export default function Register() {
           payload.business_lng = townData.lng
         }
       } else if (form.province && SA_LOCATIONS[form.province]) {
+        // No town selected – fall back to province centre
         const p = SA_LOCATIONS[form.province]
         payload.business_lat = p.lat
         payload.business_lng = p.lng
         payload.business_location = form.province
       }
 
+      // --- API calls ---
+      // 1. Create the user account
       const res = await register(payload)
       const token = res.data.access_token
       localStorage.setItem('token', token)
 
+      // 2. Fetch the full user profile (with preferences)
       const profile = await getProfile()
+
+      // 3. Update the auth context with the fresh user data
       loginUser(token, profile.data)
 
       toast.success('Account created — 5 free credits added!')
       navigate('/dashboard')
     } catch (err) {
+      // Extract the backend's detail message or show a generic fallback
       const errorMessage =
         err.response?.data?.detail || 'Registration failed. Please try again.'
       toast.error(errorMessage)
@@ -159,7 +199,9 @@ export default function Register() {
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4 py-8">
       <div className="w-full max-w-xl">
-        {/* Logo */}
+        {/* ================================================================
+            Logo
+            ================================================================ */}
         <div className="flex items-center gap-3 mb-8 justify-center">
           <div className="w-10 h-10 bg-brand-400 rounded-xl flex items-center justify-center shadow-sm">
             <Zap size={20} className="text-white" />
@@ -167,7 +209,9 @@ export default function Register() {
           <span className="text-xl font-semibold text-gray-900">TenderScout ZA</span>
         </div>
 
-        {/* Registration Card */}
+        {/* ================================================================
+            Registration Card
+            ================================================================ */}
         <div className="card p-6 md:p-8 space-y-6">
           <div>
             <h1 className="text-xl font-semibold text-gray-900">
@@ -179,7 +223,9 @@ export default function Register() {
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-5">
-            {/* Personal Details */}
+            {/* ----------------------------------------------------------------
+                Personal Details
+                ---------------------------------------------------------------- */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1.5">
                 Full name
@@ -211,7 +257,9 @@ export default function Register() {
               />
             </div>
 
-            {/* Password */}
+            {/* ----------------------------------------------------------------
+                Password
+                ---------------------------------------------------------------- */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1.5">
                 Password
@@ -238,6 +286,7 @@ export default function Register() {
                   {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                 </button>
               </div>
+              {/* Real‑time password requirement feedback */}
               {passwordTouched && (
                 <div className="mt-2 space-y-1">
                   {passwordRequirements.map((req, index) => (
@@ -256,9 +305,9 @@ export default function Register() {
               )}
             </div>
 
-            {/* =================================================================
-                COMPANY DETAILS
-                ================================================================= */}
+            {/* ----------------------------------------------------------------
+                COMPANY DETAILS (v2)
+                ---------------------------------------------------------------- */}
             <div className="border-t border-gray-100 pt-4">
               <div className="flex items-center gap-2 mb-3">
                 <Building2 size={14} className="text-brand-400" />
@@ -328,10 +377,9 @@ export default function Register() {
               </div>
             </div>
 
-        
-            {/* =================================================================
+            {/* ----------------------------------------------------------------
                 LOCATION SELECTION
-                ================================================================= */}
+                ---------------------------------------------------------------- */}
             <div className="border-t border-gray-100 pt-4">
               <div className="flex items-center gap-2 mb-3">
                 <MapPin size={14} className="text-brand-400" />
@@ -370,7 +418,7 @@ export default function Register() {
                     className="input py-2 text-sm"
                     value={form.town}
                     onChange={(e) => handleChange('town', e.target.value)}
-                    disabled={!form.province}
+                    disabled={!form.province}   // must pick province first
                   >
                     <option value="">Select town</option>
                     {townOptions.map((t) => (
@@ -383,7 +431,9 @@ export default function Register() {
               </div>
             </div>
 
-            {/* Submit Button */}
+            {/* ----------------------------------------------------------------
+                Submit Button
+                ---------------------------------------------------------------- */}
             <button
               type="submit"
               disabled={loading || (passwordTouched && !isFormValid)}
@@ -400,7 +450,7 @@ export default function Register() {
             </button>
           </form>
 
-          {/* Login Link */}
+          {/* Link to login page for existing users */}
           <p className="text-sm text-center text-gray-500">
             Already have an account?{' '}
             <Link to="/login" className="text-brand-600 hover:underline font-medium">
@@ -409,7 +459,7 @@ export default function Register() {
           </p>
         </div>
 
-        {/* Terms */}
+        {/* Legal disclaimer */}
         <p className="text-xs text-center text-gray-400 mt-6">
           By creating an account, you agree to our{' '}
           <a href="#" className="text-brand-600 hover:underline">
